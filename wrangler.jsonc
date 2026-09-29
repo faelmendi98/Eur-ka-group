@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "eureka-group-prod",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "eureka-group-prod",
+      "database_id": "9756c2b7-146d-4d0a-bd24-0c4b5b5d5364"
+    }
+  ]
+}
