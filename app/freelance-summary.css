@@ -1,0 +1,7 @@
+.freelance-level > span:last-child {
+  min-width: 92px;
+}
+
+.freelance-level > span:last-child strong {
+  color: #e5b953;
+}

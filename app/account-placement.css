@@ -1,0 +1,35 @@
+.content {
+  position: relative;
+}
+
+.content-account-slot {
+  position: absolute;
+  z-index: 90;
+  left: 30px;
+  top: 20px;
+}
+
+.content-account-slot .account-trigger {
+  min-width: 205px;
+  background: #372115;
+}
+
+.content-account-slot .account-menu {
+  top: 58px;
+}
+
+@media (max-width: 850px) {
+  .content-account-slot {
+    left: 15px;
+    top: 16px;
+  }
+
+  .content-account-slot .account-trigger {
+    min-width: 48px;
+  }
+
+  .content-account-slot .account-trigger span,
+  .content-account-slot .account-trigger em {
+    display: none;
+  }
+}
