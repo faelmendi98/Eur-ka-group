@@ -7,9 +7,10 @@
   },
   "scripts": {
     "install:ci": "bash scripts/install-ci.sh",
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vite",
+    "predev": "node scripts/init-local-db.mjs",
+    "dev": "vite --host 0.0.0.0",
     "build": "bash scripts/build-verified.sh",
-    "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
+    "start": "node scripts/init-local-db.mjs && vite --host 0.0.0.0",
     "test": "npm run build && node --experimental-sqlite --test tests/*.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
