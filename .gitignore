@@ -21,6 +21,10 @@
 .DS_Store
 *.pem
 
+# local editor/tool metadata
+/.openai/
+/tall
+
 # debug
 npm-debug.log*
 yarn-debug.log*
