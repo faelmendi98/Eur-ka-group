@@ -9,6 +9,7 @@
     "install:ci": "bash scripts/install-ci.sh",
     "predev": "node scripts/init-local-db.mjs",
     "dev": "vite --host 0.0.0.0",
+    "setup:local-admins": "node scripts/create-local-admins.mjs",
     "build": "bash scripts/build-verified.sh",
     "start": "node scripts/init-local-db.mjs && vite --host 0.0.0.0",
     "test": "npm run build && node --experimental-sqlite --test tests/*.test.mjs",

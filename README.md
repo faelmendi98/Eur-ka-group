@@ -30,6 +30,8 @@ npm run lint
 npm run build
 ```
 
+Pour créer les trois comptes Admin Eurêka dans une base D1 locale, lance d’abord l’application avec `npm run dev`, puis exécute `npm run setup:local-admins`. Les mots de passe sont générés localement et affichés une seule fois pour les comptes sans identifiants ; les mots de passe existants ne sont pas modifiés. Chaque collaborateur doit exécuter cette commande sur sa propre base locale. Cela ne crée pas de comptes en production et aucun mot de passe n’est partagé par Git.
+
 La migration est reproductible et crée les contraintes, index et déclencheurs empêchant les relations entre métiers différents.
 
 ## Limites avant ouverture commerciale
