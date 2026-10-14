@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -eu
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo HEAD)"
+if [ "$branch" = "main" ]; then
+  echo "❌ Direct push to main is blocked."
+  echo "Create a feature branch and open a merge request before merging into main."
+  exit 1
+fi
+
+echo "✅ Push allowed from branch: $branch"
+exit 0
