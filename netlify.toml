@@ -1,0 +1,13 @@
+[build]
+command = "npm run build:netlify"
+publish = "out"
+functions = "netlify/functions"
+
+[functions]
+node_bundler = "esbuild"
+
+[[redirects]]
+from = "/api/v1/*"
+to = "/.netlify/functions/v1?route=:splat"
+status = 200
+force = true

@@ -9,17 +9,21 @@
     "install:ci": "bash scripts/install-ci.sh",
     "predev": "node scripts/init-local-db.mjs",
     "dev": "vite --host 0.0.0.0",
+    "build:netlify": "next build",
     "setup:local-admins": "node scripts/create-local-admins.mjs",
     "build": "bash scripts/build-verified.sh",
     "start": "node scripts/init-local-db.mjs && vite --host 0.0.0.0",
     "test": "npm run build && node --experimental-sqlite --test tests/*.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
+    "db:supabase:generate": "node scripts/generate-supabase-schema.mjs",
+    "db:supabase:migrate": "node scripts/migrate-d1-to-supabase.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
+    "postgres": "3.4.7",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },

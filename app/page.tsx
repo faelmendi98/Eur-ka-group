@@ -1251,23 +1251,23 @@ function QuoteRequestsBoard() {
                     <i>₣</i>
                     <div>
                       <b>Attente du mandataire</b>
-                      <span>{selected.budget}</span>
+                      <span>{selected?.budget}</span>
                     </div>
                   </div>
                   <div className="quote-request-summary">
                     <article>
                       <span>DESCRIPTION DU BESOIN</span>
-                      <p>{selected.need}</p>
+                      <p>{selected?.need}</p>
                     </article>
                     <article>
                       <span>MANDATAIRE</span>
-                      <b>{selected.client}</b>
+                      <b>{selected?.client}</b>
                       <small>Client vérifié · R&D Horlogerie</small>
                     </article>
                     <article>
                       <span>DOCUMENTS REÇUS</span>
-                      <b>{selected.document}</b>
-                      <small>{selected.documentType} · {selected.documentFormat} · Déposé par {selected.client}</small>
+                      <b>{selected?.document}</b>
+                      <small>{selected?.documentType} · {selected?.documentFormat} · Déposé par {selected?.client}</small>
                       <button className="quote-document-link" onClick={() => setTab("Document mandataire")}>Consulter le document →</button>
                     </article>
                   </div>
@@ -1276,19 +1276,19 @@ function QuoteRequestsBoard() {
               {false && tab === "Document mandataire" && (
                 <div className="quote-tab-content quote-mandate-document">
                   <div className="quote-document-card">
-                    <div className="template-file-icon"><b>{selected.documentFormat}</b><i>▤</i></div>
+                    <div className="template-file-icon"><b>{selected?.documentFormat}</b><i>▤</i></div>
                     <span>DOCUMENT DÉPOSÉ PAR LE MANDATAIRE</span>
-                    <h3>{selected.document}</h3>
-                    <strong>Type de fichier : {selected.documentType} · {selected.documentFormat}</strong>
+                    <h3>{selected?.document}</h3>
+                    <strong>Type de fichier : {selected?.documentType} · {selected?.documentFormat}</strong>
                     <p>Ce document contient les informations et les paramètres transmis par le mandataire pour permettre à l’administrateur métier de préparer le devis.</p>
-                    <small>Déposé par <b>{selected.client}</b> · {selected.received}</small>
+                    <small>Déposé par <b>{selected?.client}</b> · {selected?.received}</small>
                   </div>
                   <div className="quote-document-preview">
                     <span>APERÇU DU DOCUMENT</span>
-                    <h3>Demande de devis — {selected.title}</h3>
-                    <div><b>Mandataire</b><p>{selected.client}</p></div>
-                    <div><b>Besoin communiqué</b><p>{selected.need}</p></div>
-                    <div><b>Budget souhaité</b><p>{selected.budget}</p></div>
+                    <h3>Demande de devis — {selected?.title}</h3>
+                    <div><b>Mandataire</b><p>{selected?.client}</p></div>
+                    <div><b>Besoin communiqué</b><p>{selected?.need}</p></div>
+                    <div><b>Budget souhaité</b><p>{selected?.budget}</p></div>
                     <em>Le modèle Word ou Excel définitif sera configuré plus tard dans l’espace mandataire.</em>
                   </div>
                 </div>
@@ -1500,19 +1500,19 @@ function QuoteRequestsBoard() {
                       <i>1</i>
                       <div>
                         <b>Demande reçue du mandataire</b>
-                        <small>{selected.received}</small>
+                        <small>{selected?.received}</small>
                       </div>
                     </article>
-                    {selected.status !== "Nouvelle demande" && (
+                    {selected?.status !== "Nouvelle demande" && (
                       <article>
                         <i>2</i>
                         <div>
-                          <b>Première proposition · {selected.price}</b>
+                          <b>Première proposition · {selected?.price}</b>
                           <small>Envoyée par Claire Dubois</small>
                         </div>
                       </article>
                     )}
-                    {selected.status === "Contre-proposition" && (
+                    {selected?.status === "Contre-proposition" && (
                       <article>
                         <i>3</i>
                         <div>
@@ -1614,31 +1614,34 @@ function LegalLinks(){const[opened,setOpened]=useState<{title:string;content:str
 function ProductionAccessScreen({ status, identity, trades, pendingInfo, error, onRefresh }: { status:"loading"|"anonymous"|"no-access"|"error"; identity?:{name:string;email:string}; trades:PlatformTrade[]; pendingInfo?:{kind:"admin"|"membership";label:string}; error?:string; onRefresh:()=>void }) {
   const [mode,setMode]=useState<"login"|"register"|"admin-register"|"forgot"|"reset">("login");const [emailValue,setEmailValue]=useState("");const [password,setPassword]=useState("");const [newPassword,setNewPassword]=useState("");const [displayName,setDisplayName]=useState("");const [invitationCode,setInvitationCode]=useState("");const [resetCode,setResetCode]=useState("");
   const [publicTrades,setPublicTrades]=useState<PlatformTrade[]>(trades);const [tradeId,setTradeId]=useState(""); const [requestedRole,setRequestedRole]=useState<"freelance"|"mandataire">("freelance"); const [message,setMessage]=useState(""); const [file,setFile]=useState<File|null>(null); const [sending,setSending]=useState(false); const [feedback,setFeedback]=useState("");
+  useEffect(()=>{const fragment=new URLSearchParams(window.location.hash.slice(1));const accessToken=fragment.get("access_token");if(fragment.get("type")==="recovery"&&accessToken){setResetCode(accessToken);setMode("reset");window.history.replaceState(null,"",`${window.location.pathname}${window.location.search}`);return}if(fragment.get("type")==="signup"&&accessToken){const refreshToken=fragment.get("refresh_token");const expiresIn=Number(fragment.get("expires_in"));void fetch("/api/v1/auth/session",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({accessToken,refreshToken,expiresIn})}).then(async response=>{if(!response.ok){const result=await response.json().catch(()=>({}));setFeedback(result.error||"Impossible de confirmer votre adresse e-mail.");return}window.history.replaceState(null,"",`${window.location.pathname}${window.location.search}`);onRefresh()}).catch(()=>setFeedback("Le service de confirmation est indisponible."))}},[onRefresh]);
   useEffect(()=>{if(status!=="anonymous")return;void fetch("/api/v1/public/trades",{cache:"no-store"}).then(response=>response.json()).then(data=>setPublicTrades((data.trades||[]).map((trade:any)=>({id:trade.id,name:trade.name,adminName:"",adhesionDocument:{id:"",name:"",description:"",fileName:"",url:"#"}})))).catch(()=>undefined)},[status,mode]);
   useEffect(()=>{if(!publicTrades.some(trade=>trade.id===tradeId))setTradeId(publicTrades[0]?.id||"")},[tradeId,publicTrades]);
   const submitMembership=async()=>{if(!tradeId||!file)return false;const form=new FormData();form.set("tradeId",tradeId);form.set("role",requestedRole);form.set("message",message);form.set("file",file);const response=await fetch("/api/v1/membership-requests",{method:"POST",body:form});const result=await response.json().catch(()=>({error:"Le service d’adhésion a rencontré un problème."}));if(!response.ok){setFeedback(result.error||"Demande impossible.");return false}return true};
   const authSubmit=async()=>{
     setSending(true);setFeedback("");
     const path=mode==="login"?"login":mode==="register"||mode==="admin-register"?"register":mode==="forgot"?"forgot-password":"reset-password";
-    const payload=mode==="login"?{email:emailValue,password}:mode==="register"?{email:emailValue,password,name:displayName}:mode==="admin-register"?{email:emailValue,password,name:displayName,invitationCode}:mode==="forgot"?{email:emailValue}:{email:emailValue,code:resetCode,password:newPassword};
-    const response=await fetch(`/api/v1/auth/${path}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)});const raw=await response.text();let result:{error?:string;resetCode?:string;message?:string}={};try{result=raw?JSON.parse(raw):{}}catch{result={error:"Le service de connexion a rencontré un problème. Réessayez dans un instant."}}
+    const payload=mode==="login"?{email:emailValue,password}:mode==="register"?{email:emailValue,password,name:displayName}:mode==="admin-register"?{email:emailValue,password,name:displayName,invitationCode}:mode==="forgot"?{email:emailValue}:{code:resetCode,password:newPassword};
+    let requestBody:BodyInit=JSON.stringify(payload);let requestHeaders:HeadersInit={"content-type":"application/json"};
+    if(mode==="register"){const form=new FormData();form.set("email",emailValue);form.set("password",password);form.set("name",displayName);form.set("tradeId",tradeId);form.set("role",requestedRole);form.set("message",message);if(file)form.set("file",file);requestBody=form;requestHeaders={}}
+    const response=await fetch(`/api/v1/auth/${path}`,{method:"POST",headers:requestHeaders,body:requestBody});const raw=await response.text();let result:{error?:string;resetCode?:string;message?:string}={};try{result=raw?JSON.parse(raw):{}}catch{result={error:"Le service de connexion a rencontré un problème. Réessayez dans un instant."}}
     if(!response.ok){setSending(false);setFeedback(result.error||"Action impossible.");return}
-    if(mode==="forgot"){setSending(false);if(result.resetCode)setResetCode(result.resetCode);setFeedback(result.resetCode?"Code de test généré. Copiez-le puis choisissez un nouveau mot de passe.":result.message);setMode("reset");return}
+    if(mode==="forgot"){setSending(false);setFeedback(result.message||"Si ce compte existe, un e-mail de réinitialisation a été envoyé.");setMode("reset");return}
     if(mode==="reset"){setSending(false);setFeedback("Mot de passe modifié. Vous pouvez vous connecter.");setPassword("");setNewPassword("");setMode("login");return}
-    if(mode==="register"&&!await submitMembership()){setSending(false);onRefresh();return}
+    if(mode==="register"){setSending(false);setFeedback(result.message||"Un e-mail de confirmation vous a été envoyé.");setMode("login");setPassword("");setFile(null);return}
     setSending(false);onRefresh();
   };
   const submit=async()=>{setSending(true);setFeedback("");if(await submitMembership()){setFeedback("Votre demande a été transmise à l’Admin Métier.");setFile(null);onRefresh()}setSending(false)};
   if(status==="loading")return <main className="login-screen"><section className="login-card"><EurekaLogo/><span>EURÊKA GROUP · V1 PRIVÉE</span><h1>Chargement sécurisé…</h1><p>Vérification de votre session et de vos autorisations.</p></section></main>;
   if(status==="anonymous")return <main className="login-screen"><section className="login-card"><EurekaLogo/><span>EURÊKA GROUP · COMPTES EURÊKA</span><h1>{mode==="login"?"Connexion":mode==="register"?"Créer un compte":mode==="admin-register"?"Activer une invitation":mode==="forgot"?"Mot de passe oublié":"Réinitialiser le mot de passe"}</h1>
     {(mode==="register"||mode==="admin-register")&&<label>Nom complet<input value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete="name"/></label>}
-    <label>{mode==="login"||mode==="forgot"||mode==="reset"?"Identifiant Eurêka ou adresse e-mail":"Adresse e-mail personnelle"}<input type={mode==="register"||mode==="admin-register"?"email":"text"} value={emailValue} onChange={e=>setEmailValue(e.target.value)} autoComplete="email"/></label>
+    {mode!=="reset"&&<label>{mode==="login"||mode==="forgot"?"Identifiant Eurêka ou adresse e-mail":"Adresse e-mail personnelle"}<input type={mode==="register"||mode==="admin-register"?"email":"text"} value={emailValue} onChange={e=>setEmailValue(e.target.value)} autoComplete="email"/></label>}
     {(mode==="login"||mode==="register"||mode==="admin-register")&&<label>Mot de passe<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete={mode==="login"?"current-password":"new-password"}/><small>10 caractères minimum, dont un chiffre.</small></label>}
     {mode==="register"&&<><label>Type de compte<select value={requestedRole} onChange={e=>setRequestedRole(e.target.value as "freelance"|"mandataire")}><option value="freelance">Freelance</option><option value="mandataire">Mandataire</option></select></label><label>Métier<select value={tradeId} onChange={e=>setTradeId(e.target.value)}>{publicTrades.map(trade=><option key={trade.id} value={trade.id}>{trade.name}</option>)}</select></label><label>Message<textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Présentez brièvement votre demande."/></label><label>Document d’adhésion rempli<input type="file" accept=".doc,.docx,.xls,.xlsx,.pdf" onChange={e=>setFile(e.target.files?.[0]||null)}/><small>{file?.name||"Aucun fichier sélectionné"}</small></label></>}
     {mode==="admin-register"&&<label>Code d’invitation administrateur<input type="password" value={invitationCode} onChange={e=>setInvitationCode(e.target.value)} autoComplete="off"/><small>Le rôle et le métier sont déterminés par l’invitation créée par l’Admin global.</small></label>}
-    {mode==="reset"&&<><label>Code de réinitialisation<input value={resetCode} onChange={e=>setResetCode(e.target.value)} autoComplete="one-time-code"/></label><label>Nouveau mot de passe<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} autoComplete="new-password"/></label></>}
+    {mode==="reset"&&<label>Nouveau mot de passe<input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} autoComplete="new-password"/><small>Ouvrez le lien reçu par e-mail pour valider cette réinitialisation.</small></label>}
     {feedback&&<p className="auth-feedback">{feedback}</p>}
-    <button className="primary login-submit" disabled={sending||!emailValue||(mode==="login"&&!password)||(mode==="register"&&(!displayName||!password||!tradeId||!file))||(mode==="admin-register"&&(!displayName||!password||!invitationCode))||(mode==="reset"&&(!resetCode||!newPassword))} onClick={authSubmit}>{sending?"Traitement…":mode==="login"?"Se connecter":mode==="register"?"Créer mon compte et transmettre ma demande":mode==="admin-register"?"Activer mon compte invité":mode==="forgot"?"Créer un code de réinitialisation":"Modifier le mot de passe"}</button>
+    <button className="primary login-submit" disabled={sending||(mode!=="reset"&&!emailValue)||(mode==="login"&&!password)||(mode==="register"&&(!displayName||!password||!tradeId||!file))||(mode==="admin-register"&&(!displayName||!password||!invitationCode))||(mode==="reset"&&(!resetCode||!newPassword))} onClick={authSubmit}>{sending?"Traitement…":mode==="login"?"Se connecter":mode==="register"?"Créer mon compte et transmettre ma demande":mode==="admin-register"?"Activer mon compte invité":mode==="forgot"?"Envoyer un lien de réinitialisation":"Modifier le mot de passe"}</button>
     <div className="auth-links">{mode!=="login"&&<button onClick={()=>{setMode("login");setFeedback("")}}>J’ai déjà un compte</button>}{mode==="login"&&<><button onClick={()=>{setMode("register");setFeedback("")}}>Créer un compte</button><button onClick={()=>{setMode("admin-register");setFeedback("")}}>Activer une invitation administrateur</button><button onClick={()=>{setMode("forgot");setFeedback("")}}>Mot de passe oublié</button></>}</div><LegalLinks/></section></main>;
   if(status==="error")return <main className="login-screen"><section className="login-card"><EurekaLogo/><span>EURÊKA GROUP · ACCÈS SÉCURISÉ</span><h1>Connexion indisponible</h1><p>{error||"Impossible de charger la plateforme."}</p><button className="primary login-submit" onClick={onRefresh}>Réessayer</button></section></main>;
   if(pendingInfo)return <main className="login-screen"><section className="login-card"><EurekaLogo/><span>EURÊKA GROUP · VALIDATION</span><h1>Bonjour {identity?.name}</h1><p>{pendingInfo.kind==="admin"?"Votre compte administrateur est en attente de validation par un Admin global.":"Votre demande d’adhésion est en attente de validation par l’Admin métier concerné."}</p><small>{pendingInfo.label}</small><button className="login-membership" onClick={async()=>{await fetch("/api/v1/auth/logout",{method:"POST"});location.reload()}}>Se déconnecter</button></section></main>;
@@ -1899,6 +1902,8 @@ function SectionPage({ active, onNavigate, shared }: { active: string; onNavigat
   };
   const projectName = (selectedProject?.title || "").toLowerCase();
   const selectedAcceptedProject = shared.acceptedProjects.find((project) => project.title === selectedProject?.title&&project.tradeId===shared.currentUser.tradeId);
+  const selectedPortalProject = selectedAcceptedProject;
+  const closedProject = selectedProject?.tag === "Clôturé";
   const projectClassification = selectedAcceptedProject ? { level: `Classe ${selectedAcceptedProject.projectClass}`, credits: selectedAcceptedProject.credits, price: `CHF ${selectedAcceptedProject.price.toLocaleString("fr-CH")}` } : getProjectClassification(selectedProject?.title || "");
   const timelineClosed = selectedProject?.tag === "Clôturé" || selectedProject?.tag === "Terminé";
   const timelineEnd = timelineClosed ? new Date(2026, 6, 22) : projectName.includes("tourbillon") ? new Date(2026, 7, 29) : projectName.includes("phase de lune") ? new Date(2026, 8, 24) : projectName.includes("barillet") ? new Date(2026, 9, 4) : new Date(2026, 8, 18);
@@ -2037,7 +2042,7 @@ function SectionPage({ active, onNavigate, shared }: { active: string; onNavigat
               );
             }
             return (
-              <button key={item.title} onClick={() => (active === "Accueil" ? openAdminHomeItem(item.title) : active === "Projets" ? openProject(item) : isDirectory ? setSelectedDirectoryName(item.title) : isShare && "url" in item && item.url ? window.open(item.url, "_blank", "noopener,noreferrer") : undefined)}>
+              <button key={item.title} onClick={() => (active === "Accueil" ? openAdminHomeItem(item.title) : active === "Projets" ? openProject(item) : isDirectory ? setSelectedDirectoryName(item.title) : isShare && "url" in item && typeof item.url === "string" && item.url ? window.open(item.url, "_blank", "noopener,noreferrer") : undefined)}>
                 {freelanceClass && <span className="freelance-card-class">{freelanceClass}</span>}
                 {isDirectory && profile && <span className="directory-avatar">{profile.initials}</span>}
                 {active === "Projets" && <span className="project-tile-class">{classification.level.replace("Classe ", "")}</span>}
@@ -2245,8 +2250,8 @@ function SectionPage({ active, onNavigate, shared }: { active: string; onNavigat
                   </div>
                 </section>
               )}
-              {projectTab === "Vue d’ensemble" && selectedPortalProject && <section className="project-timeline"><div className="timeline-heading"><div><span>SUIVI PERSISTANT</span><h3>Jalons du projet</h3></div>{role==="Mandataire"&&<button onClick={()=>{const title=window.prompt("Nom du nouveau jalon :")||"";if(title){const dueAt=window.prompt("Échéance (AAAA-MM-JJ), facultative :")||"";shared.onAddMilestone(selectedPortalProject.id,title,dueAt)}}}>＋ Ajouter un jalon</button>}</div><div className="mvp-card-grid">{shared.milestones.filter(item=>item.projectId===selectedPortalProject.id).length?shared.milestones.filter(item=>item.projectId===selectedPortalProject.id).map(item=><article key={item.id}><span>{item.status.toUpperCase()}</span><h3>{item.title}</h3><p>{item.dueAt||"Sans échéance"}</p><footer>{role==="Freelance"&&item.status==="planned"&&<button onClick={()=>shared.onMilestoneStatus(item.id,"in_progress")}>Commencer</button>}{role==="Freelance"&&item.status==="in_progress"&&<button className="primary" onClick={()=>shared.onMilestoneStatus(item.id,"submitted")}>Soumettre</button>}{role==="Mandataire"&&item.status==="submitted"&&<button className="primary" onClick={()=>shared.onMilestoneStatus(item.id,"validated")}>Valider</button>}</footer></article>):<p className="mvp-empty">Aucun jalon enregistré.</p>}</div></section>}
-              {projectTab === "Vue d’ensemble" && selectedPortalProject && !closedProject && <div className="modal-actions">{role==="Freelance"&&selectedPortalProject.status==="En cours"&&<button className="primary" onClick={()=>{if(window.confirm("Transmettre ce projet pour validation ?"))shared.onProjectAction(selectedPortalProject.id,"request-validation")}}>Demander la validation</button>}{role==="Freelance"&&selectedPortalProject.status==="Corrections demandées"&&<button className="primary" onClick={()=>shared.onProjectAction(selectedPortalProject.id,"resubmit")}>Renvoyer après correction</button>}{role==="Mandataire"&&selectedPortalProject.status==="En validation"&&<><button onClick={()=>{const comment=window.prompt("Correction demandée :")||"";if(comment)shared.onProjectAction(selectedPortalProject.id,"correction",{comment})}}>Demander une correction</button><button className="primary" onClick={()=>{const score=Number(window.prompt("Note du freelance (1 à 5) :","5"));if(score>=1&&score<=5&&window.confirm("Valider et clôturer définitivement le projet ?"))shared.onProjectAction(selectedPortalProject.id,"close",{score})}}>Valider et clôturer</button></>}</div>}
+              {projectTab === "Vue d’ensemble" && selectedPortalProject && <section className="project-timeline"><div className="timeline-heading"><div><span>SUIVI PERSISTANT</span><h3>Jalons du projet</h3></div>{shared.currentUser.role==="Mandataire"&&<button onClick={()=>{const title=window.prompt("Nom du nouveau jalon :")||"";if(title){const dueAt=window.prompt("Échéance (AAAA-MM-JJ), facultative :")||"";shared.onAddMilestone(selectedPortalProject.id,title,dueAt)}}}>＋ Ajouter un jalon</button>}</div><div className="mvp-card-grid">{shared.milestones.filter(item=>item.projectId===selectedPortalProject.id).length?shared.milestones.filter(item=>item.projectId===selectedPortalProject.id).map(item=><article key={item.id}><span>{item.status.toUpperCase()}</span><h3>{item.title}</h3><p>{item.dueAt||"Sans échéance"}</p><footer>{shared.currentUser.role==="Freelance"&&item.status==="planned"&&<button onClick={()=>shared.onMilestoneStatus(item.id,"in_progress")}>Commencer</button>}{shared.currentUser.role==="Freelance"&&item.status==="in_progress"&&<button className="primary" onClick={()=>shared.onMilestoneStatus(item.id,"submitted")}>Soumettre</button>}{shared.currentUser.role==="Mandataire"&&item.status==="submitted"&&<button className="primary" onClick={()=>shared.onMilestoneStatus(item.id,"validated")}>Valider</button>}</footer></article>):<p className="mvp-empty">Aucun jalon enregistré.</p>}</div></section>}
+              {projectTab === "Vue d’ensemble" && selectedPortalProject && !closedProject && <div className="modal-actions">{shared.currentUser.role==="Freelance"&&selectedPortalProject.status==="En cours"&&<button className="primary" onClick={()=>{if(window.confirm("Transmettre ce projet pour validation ?"))shared.onProjectAction(selectedPortalProject.id,"request-validation")}}>Demander la validation</button>}{shared.currentUser.role==="Freelance"&&selectedPortalProject.status==="Corrections demandées"&&<button className="primary" onClick={()=>shared.onProjectAction(selectedPortalProject.id,"resubmit")}>Renvoyer après correction</button>}{shared.currentUser.role==="Mandataire"&&selectedPortalProject.status==="En validation"&&<><button onClick={()=>{const comment=window.prompt("Correction demandée :")||"";if(comment)shared.onProjectAction(selectedPortalProject.id,"correction",{comment})}}>Demander une correction</button><button className="primary" onClick={()=>{const score=Number(window.prompt("Note du freelance (1 à 5) :","5"));if(score>=1&&score<=5&&window.confirm("Valider et clôturer définitivement le projet ?"))shared.onProjectAction(selectedPortalProject.id,"close",{score})}}>Valider et clôturer</button></>}</div>}
             </div>
           </section>
         </div>
@@ -5707,7 +5712,7 @@ export default function Home() {
               </section>
             </>
           ) : (
-            <SectionPage active={active} />
+            <SectionPage active={active} shared={shared} onNavigate={setActive} />
           ))}
       </section>
       {settingsOpen && (
