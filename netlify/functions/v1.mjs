@@ -438,7 +438,7 @@ export function createHandler({
         const input = parseBody(event);
         const accessToken = typeof input?.code === "string" ? input.code : "";
         const password = typeof input?.password === "string" ? input.password : "";
-        if (!accessToken || password.length < 10 || password.length > 128) {
+        if (!accessToken || password.length < 10 || password.length > 128 || !/\d/.test(password)) {
           return fail(400, "Lien invalide ou mot de passe trop court.", "invalid_reset_request");
         }
         const update = await fetchImpl(new URL("/auth/v1/user", baseUrl), {
