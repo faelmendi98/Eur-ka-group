@@ -4,6 +4,7 @@ import { canUploadProjectArea, classRank, invoiceTransitionAllowed, isMissionEli
 export interface V1Env {
   DB: D1Database;
   BUCKET: R2Bucket;
+  AUTH_USER_ID?: string;
   OWNER_BOOTSTRAP_EMAIL?: string;
   OWNER_BOOTSTRAP_TOKEN?: string;
   EUREKA_TEST_MODE?: string;
@@ -67,6 +68,13 @@ async function createSession(env:V1Env,userId:string){
 }
 
 async function authenticate(request: Request, env: V1Env): Promise<Auth | Response> {
+  if (env.AUTH_USER_ID) {
+    const row=await env.DB.prepare("SELECT id,auth_subject,email,display_name,status FROM users WHERE supabase_auth_id=?").bind(env.AUTH_USER_ID).first<Record<string,unknown>>();
+    if(!row)return fail("Compte Eurêka introuvable.",403,"account_not_linked");
+    if(row.status!=="active")return fail("Ce compte n’est pas actif.",403,"account_inactive");
+    const globalRole=await env.DB.prepare("SELECT 1 ok FROM global_roles WHERE user_id=? AND role='admin_eureka'").bind(row.id).first();
+    return {id:String(row.id),subject:String(row.auth_subject),email:String(row.email),name:String(row.display_name),globalAdmin:Boolean(globalRole)};
+  }
   const token=cookieValue(request,"eureka_session");
   if(!token)return fail("Authentification requise.",401,"authentication_required");
   const tokenHash=await digest(token);
