@@ -14,6 +14,7 @@ function mockDatabase() {
     calls.push({ query, values });
     if (query.includes("FROM public.trades")) return [{ id: "trade-1", name: "Horlogerie" }];
     if (query.includes("SELECT email FROM public.users")) return [{ email: "user@example.test" }];
+    if (query.includes("UPDATE public.users")) return [];
     if (query.includes("FROM public.users u")) {
       return [{
         id: "user-1",
@@ -201,6 +202,52 @@ test("password recovery accepts the Supabase email link and changes the password
   assert.match(requests[0].url, /\/auth\/v1\/user$/);
   assert.equal(requests[0].init.method, "PUT");
   assert.deepEqual(JSON.parse(requests[0].init.body), { password: "NewPassword123" });
+});
+
+test("invite activation rejects passwords that do not meet account requirements", async () => {
+  const handler = createHandler({
+    createSql: () => mockDatabase().sql,
+    fetchImpl: async () => {
+      throw new Error("Supabase should not be called for an invalid password");
+    },
+  });
+  const result = await handler(event("/auth/reset-password", {
+    method: "POST",
+    body: { code: "invite-access-token", password: "NoDigitsHere" },
+  }));
+
+  assert.equal(result.statusCode, 400);
+  assert.equal(JSON.parse(result.body).code, "invalid_reset_request");
+});
+
+test("invite activation confirms the email and starts a Eurêka session", async () => {
+  const database = mockDatabase();
+  const requests = [];
+  const handler = createHandler({
+    createSql: () => database.sql,
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return Response.json({
+        id: "auth-user-1",
+        email_confirmed_at: "2026-10-27T20:00:00Z",
+      });
+    },
+  });
+  const result = await handler(event("/auth/session", {
+    method: "POST",
+    body: {
+      accessToken: "invite-access-token",
+      refreshToken: "invite-refresh-token",
+      expiresIn: 3600,
+    },
+  }));
+
+  assert.equal(result.statusCode, 200);
+  assert.match(requests[0].url, /\/auth\/v1\/user$/);
+  assert.ok(database.calls.some(({ query }) =>
+    query.includes("UPDATE public.users") && query.includes("email_verified = 1")));
+  assert.ok(result.multiValueHeaders["set-cookie"].some((cookie) =>
+    cookie.startsWith("eureka_access=") && cookie.includes("Max-Age=3600")));
 });
 
 test("login reports upstream failures without disguising them as bad credentials", async () => {
