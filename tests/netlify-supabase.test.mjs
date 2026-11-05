@@ -93,6 +93,7 @@ const savedEnvironment = {
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_DB_URL: process.env.SUPABASE_DB_URL,
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  EUREKA_LOCAL_READ_ONLY: process.env.EUREKA_LOCAL_READ_ONLY,
 };
 
 test.before(() => {
@@ -117,6 +118,29 @@ test("Netlify endpoint returns public trades from Supabase", async () => {
   assert.deepEqual(JSON.parse(result.body), {
     trades: [{ id: "trade-1", name: "Horlogerie" }],
   });
+});
+
+test("local read-only mode rejects writes before connecting to Supabase", async () => {
+  const previousReadOnly = process.env.EUREKA_LOCAL_READ_ONLY;
+  process.env.EUREKA_LOCAL_READ_ONLY = "true";
+  try {
+    const handler = createHandler({
+      createSql: () => {
+        throw new Error("Read-only requests must not connect to Supabase.");
+      },
+    });
+    const result = await handler(event("/trades", { method: "POST", body: { name: "Test" } }));
+
+    assert.equal(result.statusCode, 403);
+    assert.equal(JSON.parse(result.body).code, "local_read_only");
+
+    const readHandler = createHandler({ createSql: () => mockDatabase().sql });
+    const readResult = await readHandler(event("/public/trades"));
+    assert.equal(readResult.statusCode, 200);
+  } finally {
+    if (previousReadOnly === undefined) delete process.env.EUREKA_LOCAL_READ_ONLY;
+    else process.env.EUREKA_LOCAL_READ_ONLY = previousReadOnly;
+  }
 });
 
 test("login resolves Eurêka identifiers and issues secure HttpOnly cookies", async () => {

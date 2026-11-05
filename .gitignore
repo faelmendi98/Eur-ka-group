@@ -46,3 +46,6 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# Local Netlify folder
+.netlify

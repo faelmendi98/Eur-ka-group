@@ -34,6 +34,8 @@ Pour créer les trois comptes Admin Eurêka dans une base D1 locale, lance d’a
 
 La migration est reproductible et crée les contraintes, index et déclencheurs empêchant les relations entre métiers différents.
 
+Pour travailler sur la version locale connectée au runtime Netlify/Supabase, utilise `npm run dev:supabase`. Depuis une session Admin Eurêka sur `localhost`, le bandeau local permet de prévisualiser les interfaces Admin métier, Mandataire et Freelance sans créer de comptes. Cet aperçu ne change pas l’identité authentifiée ni les permissions serveur ; il est en lecture seule. Le bouton de mode normal navigue vers le site publié dans le même onglet (la connexion est ainsi effectuée en contexte de premier niveau). Le bouton Retour du navigateur ramène à la version locale, dont les modifications de code restent enregistrées. Le runtime local bloque toutes les écritures métier afin de protéger les données de production ; seules la connexion et la déconnexion sont autorisées. Les modifications de code locales ne sont publiées qu’après fusion d’une PR et déploiement.
+
 ## Limites avant ouverture commerciale
 
 - Les textes juridiques sont des projets à faire valider.

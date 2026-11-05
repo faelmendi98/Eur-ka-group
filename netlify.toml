@@ -6,6 +6,16 @@ functions = "netlify/functions"
 [functions]
 node_bundler = "esbuild"
 
+[dev]
+framework = "next"
+command = "npx next dev --hostname 127.0.0.1 --port 8889"
+targetPort = 8889
+port = 8888
+
+[context.dev.environment]
+EUREKA_LOCAL_READ_ONLY = "true"
+NEXT_PUBLIC_PRODUCTION_SITE_URL = "https://magical-cascaron-8716ed.netlify.app"
+
 [[redirects]]
 from = "/api/v1/*"
 to = "/.netlify/functions/v1?route=:splat"

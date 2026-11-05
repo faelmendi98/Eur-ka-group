@@ -134,6 +134,14 @@ export function createHandler({
       return fail(500, "Configuration Supabase indisponible.", "server_configuration_error");
     }
 
+    if (
+      env.EUREKA_LOCAL_READ_ONLY === "true"
+      && httpMethod !== "GET"
+      && !["/auth/login", "/auth/logout"].includes(route)
+    ) {
+      return fail(403, "Les écritures sont désactivées dans l’application locale pour protéger les données de production.", "local_read_only");
+    }
+
     const sql = createSql(databaseUrl);
     try {
       if (route === "/public/trades" && httpMethod === "GET") {
