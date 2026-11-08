@@ -5263,6 +5263,8 @@ const roleLabels: Record<string,PlatformRole> = { freelance:"Freelance",mandatai
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
   const [accessStatus,setAccessStatus]=useState<"loading"|"anonymous"|"no-access"|"ready"|"error">("loading");
+  const [localDevelopment,setLocalDevelopment]=useState(false);
+  const [previewRole,setPreviewRole]=useState<"Admin Eurêka"|"Admin métier"|"Mandataire"|"Freelance"|null>(null);
   const [identity,setIdentity]=useState<{name:string;email:string}|undefined>();
   const [actionMessage,setActionMessage]=useState("");
   const [actionSuccess,setActionSuccess]=useState(false);
@@ -5270,7 +5272,6 @@ export default function Home() {
   const [invoices,setInvoices]=useState<Invoice[]>([]);
   const [tradeSettings,setTradeSettings]=useState<TradeSetting[]>([]);
   const [milestones,setMilestones]=useState<ProjectMilestone[]>([]);
-  const role = currentUser?.role || "Freelance";
   const [active, setActive] = useState("Accueil");
   const [metier, setMetier] = useState("R&D Horlogerie");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -5292,6 +5293,18 @@ export default function Home() {
   const [freelancer, setFreelancer] = useState<FreelancerState>({ name: "", projectClass: "D", credits: 0, note: 0 });
   const [freelanceFolders, setFreelanceFolders] = useState<SharedFolder[]>([]);
   const [mandataireFolders, setMandataireFolders] = useState<SharedFolder[]>([]);
+  useEffect(() => {
+    const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+    setLocalDevelopment(isLocalHost);
+    if (!isLocalHost) return;
+    const storedRole = localStorage.getItem("eureka-local-preview-role");
+    if (storedRole === "Admin Eurêka" || storedRole === "Admin métier" || storedRole === "Mandataire" || storedRole === "Freelance") {
+      setPreviewRole(storedRole);
+    }
+  }, []);
+  const canUseLocalEditor = localDevelopment && currentUser?.role === "Admin Eurêka";
+  const role = canUseLocalEditor ? previewRole || currentUser.role : currentUser?.role || "Freelance";
+  const productionSiteUrl = process.env.NEXT_PUBLIC_PRODUCTION_SITE_URL || "https://magical-cascaron-8716ed.netlify.app";
   const currentNav = navByRole[role];
   useEffect(() => {
     const raw = localStorage.getItem("eureka-metier-settings");
@@ -5329,7 +5342,7 @@ export default function Home() {
     }catch(error){setCurrentUser(null);setAccessStatus("error");setActionMessage(error instanceof Error?error.message:"Impossible de charger la plateforme.")}
   },[]);
   useEffect(()=>{void loadSession()},[loadSession]);
-  const runAction=async(path:string,options:RequestInit,successMessage?:string)=>{setActionMessage("");setActionSuccess(false);const response=await fetch(path,options);const result=await response.json().catch(()=>({error:"Réponse invalide"}));if(!response.ok){setActionMessage(result.error||"Action impossible.");return null}await loadSession();if(successMessage){setActionSuccess(true);setActionMessage(successMessage)}return result};
+  const runAction=async(path:string,options:RequestInit,successMessage?:string)=>{setActionMessage("");setActionSuccess(false);if(localDevelopment){setActionMessage("Aucune modification enregistrée : l’application locale est en lecture seule pour protéger les données en ligne.");return null}const response=await fetch(path,options);const result=await response.json().catch(()=>({error:"Réponse invalide"}));if(!response.ok){setActionMessage(result.error||"Action impossible.");return null}await loadSession();if(successMessage){setActionSuccess(true);setActionMessage(successMessage)}return result};
   const logout=async()=>{await fetch("/api/v1/auth/logout",{method:"POST"});setCurrentUser(null);setAccessStatus("anonymous");setAccountOpen(false);setAccountPanel(null)};
   const visible = useMemo(() => projects.filter((p) => `${p.id} ${p.title} ${p.client}`.toLowerCase().includes(query.toLowerCase())), [query]);
   const saveSettings = () => {
@@ -5391,9 +5404,38 @@ export default function Home() {
   const addMilestone=(projectId:string,title:string,dueAt?:string)=>{void runAction(`/api/v1/projects/${projectId}/milestones`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,dueAt})})};
   const milestoneStatus=(id:string,status:string)=>{void runAction(`/api/v1/milestones/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({status})})};
   if (!currentUser) return <ProductionAccessScreen status={accessStatus==="ready"?"error":accessStatus} identity={identity} trades={trades} pendingInfo={pendingInfo} error={actionMessage} onRefresh={()=>void loadSession()}/>;
-  const shared: MvpSharedProps = { quotes, onCreateQuote: createQuote, onTransmitQuote: transmitQuote, onAcceptQuote: acceptQuote, onQuoteDecision:quoteDecision, acceptedProjects, freelancer, onUpdateFreelancer: updateFreelancer, freelanceFolders, mandataireFolders, onCreateFolder: createFolder, onAddSharedFile: addSharedFile, currentUser, trades, users, applications, membershipRequests, adminInvitations, invoices, onInvoiceStatus:updateInvoice, tradeSettings, onSaveTradeSetting:saveTradeSetting, onValidateTradeSetting:validateTradeSetting, milestones, onAddMilestone:addMilestone, onMilestoneStatus:milestoneStatus, onCreateTrade:createTrade, onInviteAdmin:inviteAdmin, onDecideAdminInvitation:decideAdminInvitation, onDeleteAdminInvitation:deleteAdminInvitation, onAssignAdmin:assignAdmin, onCreateMember:createMember, onUserStatus:updateUserStatus, onDeleteUser:deleteUser, onDeleteTrade:deleteTrade, onApplyToMission:applyToMission, onSelectFreelancer:selectFreelancer, onProjectAction:projectAction, onCreateMembershipRequest:createMembershipRequest, onConfirmMembership:confirmMembership, onDecideMembership:decideMembership };
+  const viewedUser = canUseLocalEditor && previewRole ? { ...currentUser, role: previewRole } : currentUser;
+  const shared: MvpSharedProps = { quotes, onCreateQuote: createQuote, onTransmitQuote: transmitQuote, onAcceptQuote: acceptQuote, onQuoteDecision:quoteDecision, acceptedProjects, freelancer, onUpdateFreelancer: updateFreelancer, freelanceFolders, mandataireFolders, onCreateFolder: createFolder, onAddSharedFile: addSharedFile, currentUser: viewedUser, trades, users, applications, membershipRequests, adminInvitations, invoices, onInvoiceStatus:updateInvoice, tradeSettings, onSaveTradeSetting:saveTradeSetting, onValidateTradeSetting:validateTradeSetting, milestones, onAddMilestone:addMilestone, onMilestoneStatus:milestoneStatus, onCreateTrade:createTrade, onInviteAdmin:inviteAdmin, onDecideAdminInvitation:decideAdminInvitation, onDeleteAdminInvitation:deleteAdminInvitation, onAssignAdmin:assignAdmin, onCreateMember:createMember, onUserStatus:updateUserStatus, onDeleteUser:deleteUser, onDeleteTrade:deleteTrade, onApplyToMission:applyToMission, onSelectFreelancer:selectFreelancer, onProjectAction:projectAction, onCreateMembershipRequest:createMembershipRequest, onConfirmMembership:confirmMembership, onDecideMembership:decideMembership };
   return (
     <main className="app-shell" style={{ "--accent": accent } as React.CSSProperties}>
+      {canUseLocalEditor && (
+        <section className="local-editor-bar" aria-label="Mode édition local">
+          <div className="local-editor-status">
+            <strong>MODE ÉDITION · VERSION LOCALE</strong>
+            <span>Aperçu visuel uniquement · session Admin Eurêka · actions désactivées</span>
+          </div>
+          <label>
+            Espace à prévisualiser
+            <select
+              value={previewRole || currentUser.role}
+              onChange={(event) => {
+                const nextRole = event.target.value as "Admin Eurêka" | "Admin métier" | "Mandataire" | "Freelance";
+                setPreviewRole(nextRole);
+                localStorage.setItem("eureka-local-preview-role", nextRole);
+                setActive("Accueil");
+              }}
+            >
+              <option>Admin Eurêka</option>
+              <option>Admin métier</option>
+              <option>Mandataire</option>
+              <option>Freelance</option>
+            </select>
+          </label>
+          <button type="button" onClick={() => window.location.assign(productionSiteUrl)}>
+            Ouvrir le site normal dans cet onglet
+          </button>
+        </section>
+      )}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">E</div>
