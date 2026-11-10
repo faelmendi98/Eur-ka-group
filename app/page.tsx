@@ -5436,6 +5436,11 @@ export default function Home() {
           </button>
         </section>
       )}
+      {!localDevelopment && currentUser.role === "Admin Eurêka" && (
+        <a className="local-editor-entry" href="http://localhost:8888/">
+          Revenir au mode édition local
+        </a>
+      )}
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">E</div>
