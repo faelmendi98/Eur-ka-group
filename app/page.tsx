@@ -5264,6 +5264,7 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<PlatformUser | null>(null);
   const [accessStatus,setAccessStatus]=useState<"loading"|"anonymous"|"no-access"|"ready"|"error">("loading");
   const [localDevelopment,setLocalDevelopment]=useState(false);
+  const [localEditorMode,setLocalEditorMode]=useState(false);
   const [previewRole,setPreviewRole]=useState<"Admin Eurêka"|"Admin métier"|"Mandataire"|"Freelance"|null>(null);
   const [identity,setIdentity]=useState<{name:string;email:string}|undefined>();
   const [actionMessage,setActionMessage]=useState("");
@@ -5302,9 +5303,8 @@ export default function Home() {
       setPreviewRole(storedRole);
     }
   }, []);
-  const canUseLocalEditor = localDevelopment && currentUser?.role === "Admin Eurêka";
+  const canUseLocalEditor = localDevelopment && localEditorMode && currentUser?.role === "Admin Eurêka";
   const role = canUseLocalEditor ? previewRole || currentUser.role : currentUser?.role || "Freelance";
-  const productionSiteUrl = process.env.NEXT_PUBLIC_PRODUCTION_SITE_URL || "https://magical-cascaron-8716ed.netlify.app";
   const currentNav = navByRole[role];
   useEffect(() => {
     const raw = localStorage.getItem("eureka-metier-settings");
@@ -5431,15 +5431,15 @@ export default function Home() {
               <option>Freelance</option>
             </select>
           </label>
-          <button type="button" onClick={() => window.location.assign(productionSiteUrl)}>
-            Ouvrir le site normal dans cet onglet
+          <button type="button" onClick={() => { setActive("Accueil"); setLocalEditorMode(false); }}>
+            Revenir au mode normal
           </button>
         </section>
       )}
-      {!localDevelopment && currentUser.role === "Admin Eurêka" && (
-        <a className="local-editor-entry" href="http://localhost:8888/">
-          Revenir au mode édition local
-        </a>
+      {localDevelopment && !localEditorMode && currentUser.role === "Admin Eurêka" && (
+        <button className="local-editor-entry" type="button" onClick={() => { setActive("Accueil"); setLocalEditorMode(true); }}>
+          Ouvrir le mode édition
+        </button>
       )}
       <aside className="sidebar">
         <div className="brand">
