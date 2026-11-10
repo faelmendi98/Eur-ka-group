@@ -3998,16 +3998,23 @@ function UserPortal({ role, active, onNavigate, shared }: { role: string; active
   const standardsBoard = displayActive === "Normes & standards";
   useEffect(() => {
     const category = documentTemplatesBoard ? "Documents de projets" : standardsBoard ? "Normes & standards" : "";
-    if (!category) return;
-    fetch(`/api/share-documents?category=${encodeURIComponent(category)}`)
-      .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Chargement impossible");
-        return payload;
-      })
-      .then((payload) => setSharedLibraryFiles(payload.documents || []))
-      .catch(() => setSharedLibraryFiles([]));
-  }, [documentTemplatesBoard, standardsBoard]);
+    if (!category) {
+      setSharedLibraryFiles([]);
+      return;
+    }
+    const folders = role === "Freelance" ? shared.freelanceFolders : shared.mandataireFolders;
+    const categoryName = category.toLowerCase();
+    setSharedLibraryFiles(
+      folders
+        .filter((folder) => folder.name.trim().toLowerCase() === categoryName)
+        .flatMap((folder) => folder.documents.map((document) => ({
+          title: document.name,
+          name: document.fileName,
+          format: document.fileName.split(".").pop()?.toUpperCase() || "FICHIER",
+          url: document.url,
+        }))),
+    );
+  }, [documentTemplatesBoard, standardsBoard, role, shared.freelanceFolders, shared.mandataireFolders]);
   const referenceDocuments = [
     { title: "Standard de construction mouvement", type: "PDF", format: "PDF", version: "Version 3.2", description: "Règles de construction, bonnes pratiques et critères techniques applicables aux mouvements." },
     { title: "Standard de mise en plan", type: "PDF", format: "PDF", version: "Version 4.1", description: "Présentation des plans, cotation, tolérancement et informations obligatoires." },
