@@ -36,6 +36,10 @@ La migration est reproductible et crée les contraintes, index et déclencheurs 
 
 Le démarrage local par défaut (`npm run dev`) lance Netlify Dev et le runtime Netlify/Supabase; `npm run dev:supabase` reste disponible comme alias. La version locale s’ouvre par défaut en mode normal. Depuis une session Admin Eurêka sur `localhost`, « Ouvrir le mode édition » affiche les outils de prévisualisation des interfaces Admin métier, Mandataire et Freelance sans créer de comptes. Le passage entre les deux modes reste sur la même page et conserve la session ; l’aperçu ne change pas l’identité authentifiée ni les permissions serveur. Le runtime local bloque toutes les écritures métier afin de protéger les données de production ; seules la connexion et la déconnexion sont autorisées. Les modifications de code locales ne sont publiées qu’après fusion d’une PR et déploiement.
 
+## Déploiement de production
+
+La fusion d’une PR vers `main` déclenche `.github/workflows/deploy-netlify.yml`, qui construit l’application et publie le site sur Netlify. Une approbation sans fusion ne déclenche pas de déploiement. Avant de fusionner la PR qui ajoute ce workflow, configure dans les secrets Actions du dépôt `NETLIFY_AUTH_TOKEN` (jeton personnel Netlify) et `NETLIFY_SITE_ID` (API ID du site Netlify). Le jeton se crée dans les paramètres utilisateur Netlify, et l’API ID se trouve dans les paramètres du site. Ne jamais inscrire ces valeurs dans le code ou les envoyer dans une PR.
+
 ## Limites avant ouverture commerciale
 
 - Les textes juridiques sont des projets à faire valider.
