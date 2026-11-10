@@ -16,7 +16,7 @@ const databaseDir = path.join(
 const admins = [
   { name: "Fael Mendi", email: "fael.mendi@eureka.ch" },
   { name: "Isiane Mendi", email: "isiane.mendi@eureka.ch" },
-  { name: "Saïd Mendi", email: "said.mendi@eureka.ch" },
+  { name: "Saïd Mendi", email: "said.mendi@eureka-group.ch" },
 ];
 const passwordIterations = 100_000;
 

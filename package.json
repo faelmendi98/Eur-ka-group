@@ -12,6 +12,7 @@
     "dev:supabase": "npx --yes netlify-cli@27.16.2 dev",
     "build:netlify": "next build",
     "setup:local-admins": "node scripts/create-local-admins.mjs",
+    "set:local-password": "node scripts/set-local-password.mjs",
     "build": "bash scripts/build-verified.sh",
     "start": "node scripts/init-local-db.mjs && vite --host 0.0.0.0",
     "test": "npm run build && node --experimental-sqlite --test tests/*.test.mjs",
