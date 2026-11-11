@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const navByRole: Record<string, string[][]> = {
   "Admin Eurêka": [
     ["Accueil", "⌂"],
+    ["Projets", "◇"],
     ["Métiers", "◇"],
     ["Utilisateurs", "♙"],
     ["Finance", "€"],
@@ -67,6 +68,16 @@ type AdminInvitation = { id:string; name:string; email?:string; role:"Admin Eur�
 type Invoice = { id:string; reference:string; projectTitle:string; amount:number; status:string; issueDate?:string; dueDate?:string };
 type TradeSetting = { id:string; key:string; value:string; status:string };
 type ProjectMilestone={id:string;projectId:string;title:string;dueAt?:string;status:string};
+type GlobalProjectParticipant={userId:string;name:string;email?:string;role:string;status:"pending"|"accepted";invitedAt?:string;acceptedAt?:string};
+type GlobalProject={id:string;title:string;summary:string;status:"pending"|"active"|"archived";createdBy:string;creatorName:string;createdAt:string;myStatus:"pending"|"accepted"|null;participants:GlobalProjectParticipant[]};
+
+const localDemoTradeId = "local-demo-trade";
+const localDemoProjectId = "SIM-PROJET-001";
+const localDemoGlobalProjectId = "SIM-GLOBAL-PROJET-001";
+const localDemoGlobalAdminId = "SIM-GLOBAL-ADMIN";
+const localDemoFreelancerId = "local-demo-freelancer";
+const localDemoMandataireId = "local-demo-mandataire";
+const localDemoAdminId = "local-demo-admin";
 
 type MvpSharedProps = {
   quotes: QuoteRequest[];
@@ -75,6 +86,9 @@ type MvpSharedProps = {
   onAcceptQuote: (id: string) => void;
   onQuoteDecision: (id: string, decision:"revision"|"refuse", message?:string) => void;
   acceptedProjects: AcceptedProject[];
+  globalProjects:GlobalProject[];
+  onCreateGlobalProject:(title:string,summary:string,participantIds:string[])=>Promise<boolean>;
+  onAcceptGlobalProject:(projectId:string)=>Promise<boolean>;
   freelancer: FreelancerState;
   onUpdateFreelancer: (next: FreelancerState) => void;
   freelanceFolders: SharedFolder[];
@@ -1649,14 +1663,48 @@ function ProductionAccessScreen({ status, identity, trades, pendingInfo, error, 
   return <main className="login-screen"><section className="login-card"><EurekaLogo/><span>EURÊKA GROUP · ADHÉSION</span><h1>Bonjour {identity?.name}</h1><p>Votre compte Eurêka est actif, mais il n’est encore membre d’aucun métier. Transmettez une demande d’adhésion.</p><label>Métier<select value={tradeId} onChange={e=>setTradeId(e.target.value)}>{trades.map(trade=><option key={trade.id} value={trade.id}>{trade.name}</option>)}</select></label><label>Type de compte<select value={requestedRole} onChange={e=>setRequestedRole(e.target.value as "freelance"|"mandataire")}><option value="freelance">Freelance</option><option value="mandataire">Mandataire</option></select></label><label>Message<textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Présentez brièvement votre demande."/></label><label>Document d’adhésion rempli<input type="file" accept=".doc,.docx,.xls,.xlsx,.pdf" onChange={e=>setFile(e.target.files?.[0]||null)}/><small>{file?.name||"Aucun fichier sélectionné"}</small></label>{feedback&&<p>{feedback}</p>}<button className="primary login-submit" disabled={sending||!tradeId||!file} onClick={submit}>{sending?"Transmission…":"Transmettre la demande"}</button><button className="login-membership" onClick={async()=>{await fetch("/api/v1/auth/logout",{method:"POST"});location.reload()}}>Se déconnecter</button></section></main>;
 }
 
-function AdminEurekaPortal({ active, shared, onNavigate }: { active:string; shared:MvpSharedProps; onNavigate:(value:string)=>void }) {
-  const [createOpen,setCreateOpen]=useState(false); const [inviteOpen,setInviteOpen]=useState(false); const [tradeName,setTradeName]=useState(""); const [adminName,setAdminName]=useState(""); const [adminEmail,setAdminEmail]=useState(""); const [inviteRole,setInviteRole]=useState("admin_metier");const [inviteTrade,setInviteTrade]=useState(""); const [quick,setQuick]=useState(["Métiers","Utilisateurs"]);
+function GlobalProjectsBoard({shared,requestedProjectId,onConsumeRequestedProject}:{shared:MvpSharedProps;requestedProjectId?:string|null;onConsumeRequestedProject?:()=>void}) {
+  const [createOpen,setCreateOpen]=useState(false);
+  const [title,setTitle]=useState("");
+  const [summary,setSummary]=useState("");
+  const [participantIds,setParticipantIds]=useState<string[]>([]);
+  const [selectedProjectId,setSelectedProjectId]=useState<string|null>(null);
+  const [projectTab,setProjectTab]=useState("Vue d’ensemble");
+  const [saving,setSaving]=useState(false);
+  const isGlobalAdmin=shared.currentUser.role==="Admin Eurêka";
+  const selectableUsers=[...new Map(shared.users.filter(user=>user.status!=="suspended"&&user.role!=="En attente"&&user.id!==shared.currentUser.id).map(user=>[user.id,user])).values()].sort((a,b)=>a.name.localeCompare(b.name,"fr"));
+  const selectedProject=shared.globalProjects.find(project=>project.id===selectedProjectId)||null;
+  const detailProject=shared.globalProjects.find(project=>project.id===requestedProjectId)||selectedProject;
+  useEffect(()=>{if(requestedProjectId){setSelectedProjectId(requestedProjectId);setProjectTab("Vue d’ensemble");onConsumeRequestedProject?.()}},[requestedProjectId,onConsumeRequestedProject]);
+  const createProject=async()=>{
+    setSaving(true);
+    try{if(await shared.onCreateGlobalProject(title.trim(),summary.trim(),participantIds)){setCreateOpen(false);setTitle("");setSummary("");setParticipantIds([])}}
+    finally{setSaving(false)}
+  };
+  const tabs=["Vue d’ensemble","Résumé","Participants","Documents","Suivi"];
+  return <section className="mvp-workspace global-projects-board">
+    <div className="mvp-board-head"><div><span>PROJETS EURÊKA GROUP</span><h3>Projets transversaux</h3><p>Projets réunissant des membres de plusieurs espaces de la plateforme.</p></div>{isGlobalAdmin&&<button type="button" onClick={()=>setCreateOpen(true)}>＋ Nouveau projet</button>}</div>
+    {!shared.globalProjects.length?<p className="mvp-empty">{isGlobalAdmin?"Aucun projet global. Créez un projet pour inviter des participants.":"Aucun projet ne vous a encore été proposé."}</p>:<div className="global-project-list">{shared.globalProjects.map(project=><button type="button" className="global-project-card" key={project.id} onClick={()=>{setSelectedProjectId(project.id);setProjectTab("Vue d’ensemble")}}><span className={`global-project-status ${project.status}`}>{project.status==="active"?"Projet confirmé":project.status==="archived"?"Archivé":"En attente des participants"}</span><strong>{project.title}</strong><span>{project.summary}</span><small>{project.participants.filter(person=>person.status==="accepted").length} / {project.participants.length} participants confirmés · Créé par {project.creatorName}</small><b>Ouvrir le projet　›</b></button>)}</div>}
+    {createOpen&&<div className="modal-backdrop" onMouseDown={()=>!saving&&setCreateOpen(false)}><section className="modal global-project-create-modal" onMouseDown={event=>event.stopPropagation()}><div className="modal-head"><div><span>ADMIN EURÊKA · NOUVEAU PROJET</span><h2>Créer un projet</h2></div><button type="button" aria-label="Fermer" onClick={()=>setCreateOpen(false)}>×</button></div><label>Nom du projet<input autoFocus maxLength={160} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Ex. Refonte de la plateforme"/></label><label>Résumé du projet<textarea maxLength={3000} rows={4} value={summary} onChange={event=>setSummary(event.target.value)} placeholder="Présentez brièvement l’objectif et le périmètre du projet."/></label><fieldset className="global-project-people"><legend>Participants à inviter</legend>{selectableUsers.length?selectableUsers.map(user=><label key={user.id}><input type="checkbox" checked={participantIds.includes(user.id)} onChange={event=>setParticipantIds(current=>event.target.checked?[...current,user.id]:current.filter(id=>id!==user.id))}/><span><b>{user.name}</b><small>{user.role} · {user.tradeName}</small></span></label>):<p>Aucun autre compte actif disponible.</p>}</fieldset><p className="global-project-hint">Les personnes invitées recevront une notification. Le projet sera confirmé lorsque chacun aura accepté.</p><div className="modal-actions"><button type="button" disabled={saving} onClick={()=>setCreateOpen(false)}>Annuler</button><button type="button" className="primary" disabled={saving||!title.trim()||!summary.trim()||!participantIds.length} onClick={()=>void createProject()}>{saving?"Création…":"Créer et inviter"}</button></div></section></div>}
+    {detailProject&&<div className="modal-backdrop global-project-backdrop" onMouseDown={()=>setSelectedProjectId(null)}><section className="modal global-project-detail-modal" onMouseDown={event=>event.stopPropagation()}><div className="modal-head"><div><span>PROJET EURÊKA GROUP · {detailProject.status==="active"?"CONFIRMÉ":"EN ATTENTE"}</span><h2>{detailProject.title}</h2><p>Créé par {detailProject.creatorName}</p></div><button type="button" aria-label="Fermer la fiche projet" onClick={()=>setSelectedProjectId(null)}>×</button></div><nav className="global-project-tabs" aria-label="Informations du projet">{tabs.map(tab=><button type="button" className={projectTab===tab?"active":""} key={tab} onClick={()=>setProjectTab(tab)}>{tab}</button>)}</nav><div className="global-project-detail-content">
+      {projectTab==="Vue d’ensemble"&&<><div className="global-project-summary-card"><span>ÉTAT DU PROJET</span><strong>{detailProject.status==="active"?"Tous les participants ont rejoint le projet":"En attente des validations"}</strong><p>{detailProject.participants.filter(person=>person.status==="accepted").length} sur {detailProject.participants.length} participants ont confirmé leur participation.</p></div><div className="global-project-summary-card"><span>CRÉÉ PAR</span><strong>{detailProject.creatorName}</strong><p>{new Date(detailProject.createdAt).toLocaleDateString("fr-CH")}</p></div></>}
+      {projectTab==="Résumé"&&<article className="global-project-summary-card"><span>RÉSUMÉ DU PROJET</span><p className="global-project-long-summary">{detailProject.summary}</p></article>}
+      {projectTab==="Participants"&&<div className="global-project-participant-list">{detailProject.participants.map(person=><article key={person.userId}><i>{person.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><span><b>{person.name}{person.userId===detailProject.createdBy?" · Créateur":""}</b><small>{person.role}{person.email?` · ${person.email}`:""}</small></span><em className={person.status}>{person.status==="accepted"?"A rejoint le projet":"En attente"}</em></article>)}</div>}
+      {projectTab==="Documents"&&<div className="global-project-empty"><b>Documents du projet</b><p>Les documents partagés apparaîtront ici une fois le projet confirmé.</p></div>}
+      {projectTab==="Suivi"&&<div className="global-project-empty"><b>Suivi du projet</b><p>Le suivi commence dès que tous les participants ont rejoint le projet.</p></div>}
+    </div>{detailProject.status==="pending"&&detailProject.myStatus==="pending"&&<footer className="global-project-join"><p>Consultez le résumé et les participants, puis confirmez votre participation pour démarrer le projet.</p><button type="button" className="primary" onClick={()=>void shared.onAcceptGlobalProject(detailProject.id)}>Prendre part au projet</button></footer>}</section></div>}
+  </section>;
+}
+
+function AdminEurekaPortal({ active, shared, onNavigate,requestedProjectId,onConsumeRequestedProject }: { active:string; shared:MvpSharedProps; onNavigate:(value:string)=>void;requestedProjectId?:string|null;onConsumeRequestedProject?:()=>void }) {
+  const [createOpen,setCreateOpen]=useState(false); const [inviteOpen,setInviteOpen]=useState(false); const [tradeName,setTradeName]=useState(""); const [adminName,setAdminName]=useState(""); const [adminEmail,setAdminEmail]=useState(""); const [inviteRole,setInviteRole]=useState("admin_metier");const [inviteTrade,setInviteTrade]=useState(""); const [quick,setQuick]=useState(["Projets","Métiers","Utilisateurs"]);
   const [selectedTrade,setSelectedTrade]=useState<PlatformTrade|null>(null);const [assignmentTarget,setAssignmentTarget]=useState<PlatformUser|null>(null);const [assignmentTrade,setAssignmentTrade]=useState("");
   const [deleteTarget,setDeleteTarget]=useState<{kind:"user"|"trade"|"invitation";id:string;name:string}|null>(null);
   const activeUsers=shared.users.filter(user=>user.role!=="En attente");const pendingUsers=shared.users.filter(user=>user.role==="En attente");
   return <div className="simple-page"><div className="role-top"><EurekaLogo/></div><div className="simple-heading"><span>ADMINISTRATION GLOBALE · EURÊKA GROUP</span><h2>{active}</h2><i></i><p>Supervision de la plateforme et de ses espaces métiers.</p></div>
   {active==="Accueil"&&<section className="freelance-quick-home admin-quick-home"><div><span>ACCUEIL PERSONNALISÉ</span><h3>Mes accès rapides</h3></div><div className="freelance-quick-grid">{quick.map(item=><div className="quick-card-wrap" key={item}><button onClick={()=>onNavigate(item)}><i>↗</i><b>{item}</b><small>Ouvrir cet espace</small></button><button className="quick-remove" aria-label={`Supprimer ${item}`} onClick={()=>setQuick(current=>current.filter(value=>value!==item))}>×</button></div>)}</div></section>}
   {active==="Finance"&&<section className="mvp-workspace"><div className="mvp-board-head"><div><span>ADMINISTRATION GLOBALE</span><h3>Finance</h3></div></div><p className="mvp-empty">L’espace Finance est prêt à être configuré.</p></section>}
+  {active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedProjectId} onConsumeRequestedProject={onConsumeRequestedProject}/>}
   {active==="Métiers"&&<section className="mvp-workspace"><div className="mvp-board-head"><div><span>ESPACES MÉTIERS</span><h3>Métiers de la plateforme</h3></div></div><div className="mvp-card-grid">{shared.trades.map(trade=><div className="quick-card-wrap" key={trade.id}><button onClick={()=>setSelectedTrade(trade)}><span>ESPACE MÉTIER</span><h3>{trade.name}</h3><em>{shared.users.some(user=>user.tradeId===trade.id&&user.role==="Admin métier")?`Admin Métier · ${trade.adminName}`:"Aucun Admin métier actif"}</em></button><button className="quick-remove" aria-label={`Supprimer le métier ${trade.name}`} title="Supprimer le métier" onClick={()=>setDeleteTarget({kind:"trade",id:trade.id,name:trade.name})}>×</button></div>)}<button className="mvp-add-card" onClick={()=>{setTradeName("");setCreateOpen(true)}}><b>＋</b><span>Créer un métier</span></button></div></section>}
   {active==="Utilisateurs"&&<section className="mvp-workspace"><div className="mvp-board-head"><div><span>COMPTES DE LA PLATEFORME</span><h3>Utilisateurs actifs</h3><p>{activeUsers.length} comptes actifs</p></div><button onClick={()=>{setAdminName("");setAdminEmail("");setInviteRole("admin_metier");setInviteTrade(shared.trades[0]?.id||"");setInviteOpen(true)}}>＋ Inviter un responsable</button></div><div className="platform-user-list">{activeUsers.map(user=><article key={`${user.id}-${user.membershipId||user.role}`}><i>{user.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><div><b>{user.name}</b><small>{user.eurekaEmail||user.email} · {user.tradeName} · {user.status==="suspended"?"Suspendu":"Actif"}</small></div><em>{user.role === "Admin métier" ? "Admin Métier" : user.role}</em><span className="platform-actions">{user.id!==shared.currentUser.id&&user.role!=="Admin métier"&&user.role!=="Admin Eurêka"&&<button onClick={()=>{setAssignmentTarget(user);setAssignmentTrade(shared.trades[0]?.id||"")}}>Nommer Admin métier</button>}{user.id!==shared.currentUser.id&&<button onClick={()=>{const next=user.status==="suspended"?"active":"suspended";if(window.confirm(next==="suspended"?"Suspendre ce compte ?":"Réactiver ce compte ?"))shared.onUserStatus(user.id,next)}}>{user.status==="suspended"?"Réactiver":"Suspendre"}</button>}<button className="danger-action" disabled={user.id===shared.currentUser.id} onClick={()=>setDeleteTarget({kind:"user",id:user.id,name:user.name})}>{user.id===shared.currentUser.id?"Compte actuel":"Supprimer"}</button></span></article>)}</div><div className="mvp-board-head"><div><span>VALIDATION ADMINISTRATIVE</span><h3>Utilisateurs et invitations en attente</h3><p>{pendingUsers.length+shared.adminInvitations.length} éléments</p></div></div>{shared.adminInvitations.length>0&&<div className="platform-user-list">{shared.adminInvitations.map(invitation=><article key={invitation.id}><i>{invitation.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><div><b>{invitation.name}</b><small>{invitation.email||"Adresse à compléter"} · {invitation.tradeName}</small></div><em>{invitation.role} · Invitation</em><span className="platform-actions">{invitation.accountUserId?<><button onClick={()=>shared.onDecideAdminInvitation(invitation.id,"rejected",invitation.accountUserId)}>Refuser</button><button className="primary" onClick={()=>{if(window.confirm(`Accepter ${invitation.name} comme ${invitation.role} ?`))shared.onDecideAdminInvitation(invitation.id,"accepted",invitation.accountUserId)}}>Accepter</button></>:<small>Compte non activé</small>}<button className="danger-action" onClick={()=>setDeleteTarget({kind:"invitation",id:invitation.id,name:invitation.name})}>Supprimer</button></span></article>)}</div>}{pendingUsers.length>0&&<div className="platform-user-list">{pendingUsers.map(user=><article key={user.id}><i>{user.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><div><b>{user.name}</b><small>{user.eurekaEmail||user.email} · Compte sans rôle actif</small></div><em>En attente</em><button className="danger-action" onClick={()=>setDeleteTarget({kind:"user",id:user.id,name:user.name})}>Supprimer</button></article>)}</div>}</section>}
   {createOpen&&<div className="modal-backdrop" onMouseDown={()=>setCreateOpen(false)}><section className="modal mvp-small-modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-head"><div><span>ADMIN EURÊKA</span><h2>Créer un métier</h2></div><button onClick={()=>setCreateOpen(false)}>×</button></div><label>Nom du métier<input autoFocus value={tradeName} onChange={e=>setTradeName(e.target.value)}/></label><p>L’Admin métier pourra être nommé ou invité séparément.</p><div className="modal-actions"><button onClick={()=>setCreateOpen(false)}>Annuler</button><button className="primary" disabled={!tradeName.trim()} onClick={()=>{shared.onCreateTrade(tradeName.trim());setCreateOpen(false)}}>Créer le métier</button></div></section></div>}
@@ -1905,10 +1953,10 @@ function SectionPage({ active, onNavigate, shared }: { active: string; onNavigat
   const projectName = (selectedProject?.title || "").toLowerCase();
   const selectedAcceptedProject = shared.acceptedProjects.find((project) => project.title === selectedProject?.title&&project.tradeId===shared.currentUser.tradeId);
   const selectedPortalProject = selectedAcceptedProject;
-  const closedProject = selectedProject?.tag === "Clôturé";
+  const closedProject = selectedProject?.tag === "Clôturé" || selectedPortalProject?.status === "Clôturé";
   const projectClassification = selectedAcceptedProject ? { level: `Classe ${selectedAcceptedProject.projectClass}`, credits: selectedAcceptedProject.credits, price: `CHF ${selectedAcceptedProject.price.toLocaleString("fr-CH")}` } : getProjectClassification(selectedProject?.title || "");
   const timelineClosed = selectedProject?.tag === "Clôturé" || selectedProject?.tag === "Terminé";
-  const timelineEnd = timelineClosed ? new Date(2026, 6, 22) : projectName.includes("tourbillon") ? new Date(2026, 7, 29) : projectName.includes("phase de lune") ? new Date(2026, 8, 24) : projectName.includes("barillet") ? new Date(2026, 9, 4) : new Date(2026, 8, 18);
+  const timelineEnd = timelineClosed ? new Date(2026, 6, 22) : selectedAcceptedProject?.id === localDemoProjectId ? new Date(2026, 11, 15) : projectName.includes("tourbillon") ? new Date(2026, 7, 29) : projectName.includes("phase de lune") ? new Date(2026, 8, 24) : projectName.includes("barillet") ? new Date(2026, 9, 4) : new Date(2026, 8, 18);
   const timelineStart = timelineClosed ? new Date(timelineEnd.getTime() - 45 * 24 * 60 * 60 * 1000) : new Date(2026, 7, 4);
   const today = new Date();
   const timelineProgress = timelineClosed ? 100 : Math.max(0, Math.min(100, ((today.getTime() - timelineStart.getTime()) / (timelineEnd.getTime() - timelineStart.getTime())) * 100));
@@ -4129,10 +4177,10 @@ function UserPortal({ role, active, onNavigate, shared }: { role: string; active
   const projectTabs = closedProject ? ["Vue d’ensemble", "Évaluation", "PV validés", "Documents"] : ["Vue d’ensemble", "Cahier des charges", "Missions", "Documents", "Suivi"];
   const projectTabItems: Record<string, { title: string; meta: string; tag: string }[]> = {
     "Vue d’ensemble": selectedPortalProject ? [
-          { title:"Identifiant du projet",meta:selectedPortalProject.id,tag:"Persistant" },
+          { title:"Identifiant du projet",meta:selectedPortalProject.id,tag:selectedPortalProject.id===localDemoProjectId?"Simulation locale":"Persistant" },
           { title:"État du projet",meta:selectedPortalProject.status,tag:selectedPortalProject.status },
           { title:"Budget accepté",meta:`CHF ${selectedPortalProject.price.toLocaleString("fr-CH")}`,tag:"Virement manuel" },
-          { title:"Classe et crédits",meta:`Classe ${selectedPortalProject.projectClass} · ${selectedPortalProject.credits} crédits immobilisés`,tag:"Calcul serveur" },
+          { title:"Classe et crédits",meta:`Classe ${selectedPortalProject.projectClass} · ${selectedPortalProject.credits} crédits immobilisés`,tag:selectedPortalProject.id===localDemoProjectId?"Simulation locale":"Calcul serveur" },
         ] : closedProject ? [
           {
             title: "Archive du projet",
@@ -4292,7 +4340,7 @@ function UserPortal({ role, active, onNavigate, shared }: { role: string; active
   const projectName = (selectedProject?.title || "").toLowerCase();
   const classification = getProjectClassification(selectedProject?.title || "");
   const closedTimelineEnd = projectName.includes("nomenclature") ? new Date(2026, 3, 18) : projectName.includes("dossier de plans") ? new Date(2026, 5, 6) : new Date(2026, 6, 22);
-  const timelineEnd = closedProject ? closedTimelineEnd : projectName.includes("tourbillon") ? new Date(2026, 7, 29) : projectName.includes("phase de lune") ? new Date(2026, 8, 24) : projectName.includes("barillet") ? new Date(2026, 9, 4) : new Date(2026, 8, 18);
+  const timelineEnd = closedProject ? closedTimelineEnd : selectedPortalProject?.id === localDemoProjectId ? new Date(2026, 11, 15) : projectName.includes("tourbillon") ? new Date(2026, 7, 29) : projectName.includes("phase de lune") ? new Date(2026, 8, 24) : projectName.includes("barillet") ? new Date(2026, 9, 4) : new Date(2026, 8, 18);
   const timelineStart = closedProject ? new Date(timelineEnd.getTime() - 45 * 24 * 60 * 60 * 1000) : new Date(2026, 7, 4);
   const today = new Date();
   const timelineProgress = closedProject ? 100 : Math.max(0, Math.min(100, ((today.getTime() - timelineStart.getTime()) / (timelineEnd.getTime() - timelineStart.getTime())) * 100));
@@ -4324,6 +4372,18 @@ function UserPortal({ role, active, onNavigate, shared }: { role: string; active
     const currentProject = selectedProject.title;
     const currentTab = projectTab;
     const stateKey = `${currentProject}::${currentTab}`;
+    if(selectedPortalProject.id===localDemoProjectId){
+      const sampleDocument=currentTab==="Cahier des charges"
+        ?{name:"Cahier-des-charges.pdf",format:"PDF",uploadedBy:"Sophie Laurent",url:""}
+        :currentTab==="Missions"
+          ?{name:"Premiere-proposition-technique.pdf",format:"PDF",uploadedBy:"Sophie Laurent",url:""}
+          :currentTab==="Documents"
+            ?{name:"Plan-du-prototype.step",format:"STEP",uploadedBy:"Camille Dubois",url:""}
+            :{name:"Compte-rendu-de-seance.pdf",format:"PDF",uploadedBy:"Camille Dubois",url:""};
+      setProjectDocuments(current=>({...current,[stateKey]:current[stateKey]||[sampleDocument]}));
+      setProjectUploadStatus("");
+      return;
+    }
     setProjectUploadStatus("Chargement des documents…");
     fetch(`/api/v1/documents?tradeId=${encodeURIComponent(shared.currentUser.tradeId)}&projectId=${encodeURIComponent(selectedPortalProject.id)}&area=${encodeURIComponent(documentAreas[currentTab])}`)
       .then(async (response) => {
@@ -4341,6 +4401,12 @@ function UserPortal({ role, active, onNavigate, shared }: { role: string; active
     if (!files || !selectedProject || !selectedPortalProject) return;
     const selectedFiles = Array.from(files);
     const stateKey = `${selectedProject.title}::${tab}`;
+    if(selectedPortalProject.id===localDemoProjectId){
+      const uploaded=selectedFiles.map(file=>({name:file.name,format:file.name.split(".").pop()?.toUpperCase()||"FICHIER",uploadedBy:shared.currentUser.name,url:""}));
+      setProjectDocuments(current=>({...current,[stateKey]:[...uploaded,...(current[stateKey]||[])]}));
+      setProjectUploadStatus("Fichiers ajoutés à la simulation locale uniquement.");
+      return;
+    }
     setProjectUploadStatus(`Envoi de ${selectedFiles.length} fichier${selectedFiles.length > 1 ? "s" : ""}…`);
     try {
       const uploaded: { name: string; format: string; uploadedBy: string; url: string }[] = [];
@@ -5283,6 +5349,24 @@ export default function Home() {
   const [tradeSettings,setTradeSettings]=useState<TradeSetting[]>([]);
   const [milestones,setMilestones]=useState<ProjectMilestone[]>([]);
   const [active, setActive] = useState("Accueil");
+  const [globalProjects,setGlobalProjects]=useState<GlobalProject[]>([]);
+  const [localDemoGlobalProjects,setLocalDemoGlobalProjects]=useState<GlobalProject[]>([{
+    id:localDemoGlobalProjectId,
+    title:"Lancement de la nouvelle plateforme Eurêka",
+    summary:"Projet transversal pour préparer le lancement de la plateforme : coordination des espaces, validation des parcours et retours des équipes.",
+    status:"pending",
+    createdBy:localDemoGlobalAdminId,
+    creatorName:"Admin Eurêka",
+    createdAt:"2026-11-10T09:00:00.000Z",
+    myStatus:"accepted",
+    participants:[
+      {userId:localDemoGlobalAdminId,name:"Admin Eurêka",role:"Admin Eurêka",status:"accepted"},
+      {userId:localDemoAdminId,name:"Alex Martin",role:"Admin métier",status:"accepted"},
+      {userId:localDemoMandataireId,name:"Sophie Laurent",role:"Mandataire",status:"pending"},
+      {userId:localDemoFreelancerId,name:"Camille Dubois",role:"Freelance",status:"pending"},
+    ],
+  }]);
+  const [requestedGlobalProjectId,setRequestedGlobalProjectId]=useState<string|null>(null);
   const [metier, setMetier] = useState("R&D Horlogerie");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [noticeOpen, setNoticeOpen] = useState(false);
@@ -5300,9 +5384,41 @@ export default function Home() {
   const [applications,setApplications]=useState<MissionApplication[]>([]);
   const [quotes, setQuotes] = useState<QuoteRequest[]>([]);
   const [acceptedProjects, setAcceptedProjects] = useState<AcceptedProject[]>([]);
+  const [localDemoProject, setLocalDemoProject] = useState<AcceptedProject>({
+    id: localDemoProjectId,
+    title: "Prototype de calibre automatique",
+    projectClass: "A",
+    credits: 75,
+    price: 42800,
+    status: "En cours",
+    tradeId: localDemoTradeId,
+    mandataireId: localDemoMandataireId,
+    freelancerId: localDemoFreelancerId,
+  });
+  const [localDemoMilestones, setLocalDemoMilestones] = useState<ProjectMilestone[]>([
+    { id: "SIM-JALON-001", projectId: localDemoProjectId, title: "Cahier des charges validé", dueAt: "12 nov. 2026", status: "completed" },
+    { id: "SIM-JALON-002", projectId: localDemoProjectId, title: "Première proposition technique", dueAt: "19 nov. 2026", status: "in_progress" },
+    { id: "SIM-JALON-003", projectId: localDemoProjectId, title: "Validation du prototype", dueAt: "30 nov. 2026", status: "planned" },
+  ]);
+  const [localDemoApplications, setLocalDemoApplications] = useState<MissionApplication[]>([]);
+  const [localDemoInvoices, setLocalDemoInvoices] = useState<Invoice[]>([
+    { id: "SIM-FACTURE-001", reference: "SIM-F-001", projectTitle: "Prototype de calibre automatique", amount: 12840, status: "pending", issueDate: "2026-11-01", dueDate: "2026-11-30" },
+  ]);
+  const [localDemoFreelancer, setLocalDemoFreelancer] = useState<FreelancerState>({
+    name: "Camille Dubois",
+    projectClass: "A",
+    credits: 120,
+    note: 4.8,
+  });
   const [freelancer, setFreelancer] = useState<FreelancerState>({ name: "", projectClass: "D", credits: 0, note: 0 });
   const [freelanceFolders, setFreelanceFolders] = useState<SharedFolder[]>([]);
   const [mandataireFolders, setMandataireFolders] = useState<SharedFolder[]>([]);
+  const [localDemoFreelanceFolders, setLocalDemoFreelanceFolders] = useState<SharedFolder[]>([
+    { id: "SIM-DOSSIER-FREELANCE", name: "Documents du projet", documents: [{ id: "SIM-DOC-FREELANCE", name: "Cahier des charges", description: "Document de démonstration", fileName: "cahier-des-charges.pdf", url: "" }] },
+  ]);
+  const [localDemoMandataireFolders, setLocalDemoMandataireFolders] = useState<SharedFolder[]>([
+    { id: "SIM-DOSSIER-MANDATAIRE", name: "Documents du projet", documents: [{ id: "SIM-DOC-MANDATAIRE", name: "Compte rendu de lancement", description: "Document de démonstration", fileName: "compte-rendu.pdf", url: "" }] },
+  ]);
   useEffect(() => {
     const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
     setLocalDevelopment(isLocalHost);
@@ -5314,6 +5430,13 @@ export default function Home() {
   }, []);
   const canUseLocalEditor = localDevelopment && localEditorMode && currentUser?.role === "Admin Eurêka";
   const role = canUseLocalEditor ? previewRole || currentUser.role : currentUser?.role || "Freelance";
+  const localProjectSimulation = canUseLocalEditor && ["Admin métier", "Mandataire", "Freelance"].includes(role);
+  const localPreviewUserId=localProjectSimulation?role==="Admin métier"?localDemoAdminId:role==="Mandataire"?localDemoMandataireId:localDemoFreelancerId:currentUser?.id;
+  const simulatedGlobalUsers:PlatformUser[]=[
+    {id:localDemoAdminId,name:"Alex Martin",role:"Admin métier",tradeId:localDemoTradeId,tradeName:"R&D Horlogerie — Simulation",status:"active"},
+    {id:localDemoMandataireId,name:"Sophie Laurent",role:"Mandataire",tradeId:localDemoTradeId,tradeName:"R&D Horlogerie — Simulation",status:"active"},
+    {id:localDemoFreelancerId,name:localDemoFreelancer.name,role:"Freelance",tradeId:localDemoTradeId,tradeName:"R&D Horlogerie — Simulation",status:"active",projectClass:localDemoFreelancer.projectClass,credits:localDemoFreelancer.credits,note:localDemoFreelancer.note},
+  ];
   const currentNav = navByRole[role];
   useEffect(() => {
     const raw = localStorage.getItem("eureka-metier-settings");
@@ -5333,7 +5456,7 @@ export default function Home() {
       setIdentity({name:data.currentUser.name,email:data.currentUser.email});
       const mappedUsers:PlatformUser[]=(data.users||[]).map((user:any)=>({id:user.id,membershipId:user.membership_id||undefined,email:user.email,eurekaEmail:user.eureka_email||undefined,name:user.display_name,role:roleLabels[user.role]||"Freelance",tradeId:user.trade_id,tradeName:user.trade_name,status:user.status,projectClass:user.project_class||undefined,credits:user.credits??undefined,reservedCredits:user.reserved_credits??undefined,note:user.rating??undefined}));
       const mappedTrades:PlatformTrade[]=(data.trades||[]).map((trade:any)=>({id:trade.id,name:trade.name,adminName:mappedUsers.find(user=>user.tradeId===trade.id&&user.role==="Admin métier")?.name||"Admin Métier à inviter",adhesionDocument:{id:`adh-${trade.id}`,name:`Document d’adhésion — ${trade.name}`,description:"Document fourni par l’Admin Métier",fileName:"Document_adhesion.docx",url:"#"}}));
-      setUsers(mappedUsers);setTrades(mappedTrades);setNotifications(data.notifications||[]);setInvoices((data.invoices||[]).map((invoice:any)=>({id:invoice.id,reference:invoice.reference,projectTitle:invoice.project_title,amount:Number(invoice.amount_cents)/100,status:invoice.status,issueDate:invoice.issue_date,dueDate:invoice.due_date})));setTradeSettings((data.tradeSettings||[]).map((setting:any)=>{let parsed={value:setting.value_json};try{parsed=JSON.parse(setting.value_json)}catch{}return{id:setting.id,key:setting.setting_key,value:parsed.value||setting.value_json,status:setting.status}}));setMilestones((data.milestones||[]).map((milestone:any)=>({id:milestone.id,projectId:milestone.project_id,title:milestone.title,dueAt:milestone.due_at,status:milestone.status})));
+      setUsers(mappedUsers);setTrades(mappedTrades);setNotifications(data.notifications||[]);setInvoices((data.invoices||[]).map((invoice:any)=>({id:invoice.id,reference:invoice.reference,projectTitle:invoice.project_title,amount:Number(invoice.amount_cents)/100,status:invoice.status,issueDate:invoice.issue_date,dueDate:invoice.due_date})));setTradeSettings((data.tradeSettings||[]).map((setting:any)=>{let parsed={value:setting.value_json};try{parsed=JSON.parse(setting.value_json)}catch{}return{id:setting.id,key:setting.setting_key,value:parsed.value||setting.value_json,status:setting.status}}));setMilestones((data.milestones||[]).map((milestone:any)=>({id:milestone.id,projectId:milestone.project_id,title:milestone.title,dueAt:milestone.due_at,status:milestone.status})));setGlobalProjects((data.globalProjects||[]).map((project:any)=>({id:project.id,title:project.title,summary:project.summary,status:project.status,createdBy:project.created_by,creatorName:project.creator_name,createdAt:project.created_at,myStatus:project.my_status,participants:(project.participants||[]).map((participant:any)=>({userId:participant.user_id,name:participant.display_name,email:participant.email,role:participant.role,status:participant.status,invitedAt:participant.invited_at,acceptedAt:participant.accepted_at}))})));
       const currentMembership=data.memberships?.[0];
       const mappedCurrent:PlatformUser|undefined=data.currentUser.globalAdmin?{id:data.currentUser.id,email:data.currentUser.email,eurekaEmail:data.currentUser.eurekaEmail,name:data.currentUser.name,role:"Admin Eurêka",tradeId:"all-trades",tradeName:"Tous les métiers"}:currentMembership?{id:data.currentUser.id,membershipId:currentMembership.id,email:data.currentUser.email,eurekaEmail:data.currentUser.eurekaEmail,name:data.currentUser.name,role:roleLabels[currentMembership.role]||"Freelance",tradeId:currentMembership.trade_id,tradeName:mappedTrades.find(trade=>trade.id===currentMembership.trade_id)?.name||"Métier",projectClass:currentMembership.project_class||undefined,credits:currentMembership.credits,note:currentMembership.rating}:undefined;
       setAdminInvitations((data.adminInvitations||[]).map((invitation:any)=>({id:invitation.id,name:invitation.display_name,email:invitation.email||undefined,role:invitation.role==="admin_eureka"?"Admin Eurêka":"Admin métier",tradeId:invitation.trade_id||undefined,tradeName:invitation.role==="admin_eureka"?"Tous les métiers":invitation.trade_name||"Métier obligatoire",status:invitation.status,accountUserId:invitation.account_user_id||undefined})));
@@ -5352,6 +5475,38 @@ export default function Home() {
   },[]);
   useEffect(()=>{void loadSession()},[loadSession]);
   const runAction=async(path:string,options:RequestInit,successMessage?:string)=>{setActionMessage("");setActionSuccess(false);if(localDevelopment){setActionMessage("Aucune modification enregistrée : l’application locale est en lecture seule pour protéger les données en ligne.");return null}const response=await fetch(path,options);const result=await response.json().catch(()=>({error:"Réponse invalide"}));if(!response.ok){setActionMessage(result.error||"Action impossible.");return null}await loadSession();if(successMessage){setActionSuccess(true);setActionMessage(successMessage)}return result};
+  const createGlobalProject:MvpSharedProps["onCreateGlobalProject"]=async(title,summary,participantIds)=>{
+    if(canUseLocalEditor){
+      const selectedUsers=[...users,...simulatedGlobalUsers].filter((user,index,all)=>participantIds.includes(user.id)&&all.findIndex(candidate=>candidate.id===user.id)===index);
+      if(!title.trim()||!summary.trim()||selectedUsers.length!==participantIds.length)return false;
+      const projectId=`SIM-GLOBAL-LOCAL-${localDemoGlobalProjects.length}`;
+      setLocalDemoGlobalProjects(projects=>[{
+        id:projectId,title,summary,status:"pending",createdBy:currentUser!.id,creatorName:currentUser!.name,createdAt:new Date().toISOString(),myStatus:"accepted",
+        participants:[
+          {userId:currentUser!.id,name:currentUser!.name,role:"Admin Eurêka",status:"accepted"},
+          ...selectedUsers.map(user=>({userId:user.id,name:user.name,email:user.email,role:user.role,status:"pending" as const})),
+        ],
+      },...projects]);
+      setActionSuccess(true);setActionMessage("Simulation locale : projet créé et invitations simulées, sans écriture dans la base.");
+      return true;
+    }
+    return Boolean(await runAction("/api/v1/global-projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,summary,participantIds})},"Projet créé et invitations envoyées."));
+  };
+  const acceptGlobalProject:MvpSharedProps["onAcceptGlobalProject"]=async(projectId)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")&&localPreviewUserId){
+      const selectedProject=localDemoGlobalProjects.find(project=>project.id===projectId);
+      const accepted=Boolean(selectedProject?.participants.some(person=>person.userId===localPreviewUserId));
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>{
+        if(project.id!==projectId)return project;
+        const participants=project.participants.map(person=>person.userId===localPreviewUserId&&person.status==="pending"?{...person,status:"accepted" as const,acceptedAt:new Date().toISOString()}:person);
+        return {...project,participants,status:participants.every(person=>person.status==="accepted")?"active":project.status};
+      }));
+      if(accepted){setActionSuccess(true);setActionMessage("Simulation locale : votre participation a été confirmée.");}
+      return accepted;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/accept`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"},"Votre participation a été confirmée."));
+  };
+  const consumeRequestedGlobalProject=useCallback(()=>setRequestedGlobalProjectId(null),[]);
   const logout=async()=>{await fetch("/api/v1/auth/logout",{method:"POST"});setCurrentUser(null);setAccessStatus("anonymous");setAccountOpen(false);setAccountPanel(null)};
   const visible = useMemo(() => projects.filter((p) => `${p.id} ${p.title} ${p.client}`.toLowerCase().includes(query.toLowerCase())), [query]);
   const saveSettings = () => {
@@ -5364,6 +5519,7 @@ export default function Home() {
     }, 650);
   };
   const createQuote: MvpSharedProps["onCreateQuote"] = (quote) => {
+    if(localProjectSimulation&&previewRole==="Mandataire"){setActionMessage("Simulation : la demande n’est pas enregistrée en base.");return}
     if (!currentUser || currentUser.role !== "Mandataire") return;
     const form=new FormData();form.set("tradeId",currentUser.tradeId);form.set("personalNumber",quote.mandataireNumber);form.set("projectName",quote.projectName);if(quote.requestFile.sourceFile)form.set("file",quote.requestFile.sourceFile);void runAction("/api/v1/quote-requests",{method:"POST",body:form});
   };
@@ -5375,12 +5531,14 @@ export default function Home() {
   };
   const quoteDecision:MvpSharedProps["onQuoteDecision"]=(id,decision,message)=>{void runAction(`/api/v1/quotes/${id}/${decision}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({message})})};
   const createFolder: MvpSharedProps["onCreateFolder"] = (audience, folderName) => {
+    if(localProjectSimulation){const folder:SharedFolder={id:`SIM-DOSSIER-${localDemoFreelanceFolders.length+localDemoMandataireFolders.length+1}`,name:folderName,documents:[]};if(audience==="freelance")setLocalDemoFreelanceFolders(items=>[...items,folder]);else setLocalDemoMandataireFolders(items=>[...items,folder]);return}
     if(!currentUser)return;void runAction("/api/v1/share-folders",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({tradeId:currentUser.tradeId,audience,name:folderName})});
   };
   const addSharedFile: MvpSharedProps["onAddSharedFile"] = (audience, folderId, file) => {
+    if(localProjectSimulation){const setFolders=audience==="freelance"?setLocalDemoFreelanceFolders:setLocalDemoMandataireFolders;setFolders(items=>items.map(folder=>folder.id===folderId?{...folder,documents:[...folder.documents,{...file,id:`SIM-DOC-${Date.now()}`}]}:folder));return}
     if(!currentUser||!file.sourceFile)return;const form=new FormData();form.set("tradeId",currentUser.tradeId);form.set("shareFolderId",folderId);form.set("area",audience==="freelance"?"partage_freelance":"partage_mandataire");form.set("visibility",audience==="freelance"?"trade_freelance":"trade_mandataire");form.set("file",file.sourceFile);void runAction("/api/v1/documents",{method:"POST",body:form});
   };
-  const updateFreelancer = (next:FreelancerState) => {const target=users.find(user=>user.name===next.name&&user.role==="Freelance");if(!target?.membershipId)return;void runAction(`/api/v1/members/${target.membershipId}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({projectClass:next.projectClass,credits:next.credits,rating:next.note})})};
+  const updateFreelancer = (next:FreelancerState) => {if(localProjectSimulation){setLocalDemoFreelancer(next);return}const target=users.find(user=>user.name===next.name&&user.role==="Freelance");if(!target?.membershipId)return;void runAction(`/api/v1/members/${target.membershipId}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({projectClass:next.projectClass,credits:next.credits,rating:next.note})})};
   const createTrade:MvpSharedProps["onCreateTrade"] = (tradeName) => {void runAction("/api/v1/trades",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:tradeName})})};
   const inviteAdmin:MvpSharedProps["onInviteAdmin"]=(values)=>{void (async()=>{const result=await runAction("/api/v1/admin-invitations",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(values)});if(result?.invitationCode)window.alert(`Code d’invitation : ${result.invitationCode}\nTransmettez-le au responsable avec son adresse e-mail.`)})()};
   const decideAdminInvitation:MvpSharedProps["onDecideAdminInvitation"]=(id,decision,userId)=>{void runAction(`/api/v1/admin-invitations/${id}/decision`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({decision,userId})})};
@@ -5391,37 +5549,86 @@ export default function Home() {
   const deleteUser:MvpSharedProps["onDeleteUser"]=(userId)=>{void runAction(`/api/v1/users/${userId}`,{method:"DELETE"},"Utilisateur supprimé avec succès.")};
   const deleteTrade:MvpSharedProps["onDeleteTrade"]=(tradeId)=>{void runAction(`/api/v1/trades/${tradeId}`,{method:"DELETE"},"Métier supprimé avec succès.")};
   const applyToMission = (projectId:string,freelancerId:string) => {
+    if(localProjectSimulation&&projectId===localDemoProjectId){setLocalDemoApplications(items=>items.some(item=>item.projectId===projectId&&item.freelancerId===freelancerId)?items:[...items,{id:"SIM-CANDIDATURE-001",projectId,freelancerId,tradeId:localDemoTradeId}]);return}
     const project = acceptedProjects.find(item=>item.id===projectId);
     const applicant = users.find(user=>user.id===freelancerId&&user.role==="Freelance");
     if (!project || !applicant || project.tradeId!==applicant.tradeId || !["À attribuer","Publié"].includes(project.status) || project.freelancerId) return;
     void runAction(`/api/v1/missions/${projectId}/applications`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
   };
   const selectFreelancer = (projectId:string,freelancerId:string) => {
+    if(localProjectSimulation&&projectId===localDemoProjectId){setLocalDemoProject(project=>({...project,freelancerId,status:"En cours"}));return}
     const project = acceptedProjects.find(item=>item.id===projectId);
     const applicant = applications.find(item=>item.projectId===projectId&&item.freelancerId===freelancerId);
     const freelancerUser = users.find(user=>user.id===freelancerId&&user.role==="Freelance");
     if (!project || !applicant || !freelancerUser || project.tradeId!==freelancerUser.tradeId || project.mandataireId!==currentUser?.id) return;
     void runAction(`/api/v1/missions/${projectId}/assign`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({applicationId:applicant.id})});
   };
-  const projectAction:MvpSharedProps["onProjectAction"]=(projectId,action,values)=>{void runAction(`/api/v1/projects/${projectId}/${action}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(values||{})})};
+  const projectAction:MvpSharedProps["onProjectAction"]=(projectId,action,values)=>{
+    if(localProjectSimulation&&projectId===localDemoProjectId){
+      const status=action==="request-validation"||action==="resubmit"?"En validation":action==="correction"?"Corrections demandées":"Clôturé";
+      setLocalDemoProject(project=>({...project,status}));
+      return;
+    }
+    void runAction(`/api/v1/projects/${projectId}/${action}`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(values||{})});
+  };
   const createMembershipRequest: MvpSharedProps["onCreateMembershipRequest"] = request => {void runAction("/api/v1/membership-requests",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({tradeId:request.tradeId,role:request.requestedRole.toLowerCase()})})};
   const confirmMembership = (id:string) => {void runAction(`/api/v1/membership-requests/${id}/decision`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({decision:"accepted"})})};
   const decideMembership = (id:string,decision:"accepted"|"rejected"|"needs_information") => {void runAction(`/api/v1/membership-requests/${id}/decision`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({decision})})};
-  const updateInvoice=(id:string,status:string)=>{void runAction(`/api/v1/invoices/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({status})})};
+  const updateInvoice=(id:string,status:string)=>{if(localProjectSimulation&&id.startsWith("SIM-FACTURE-")){setLocalDemoInvoices(items=>items.map(invoice=>invoice.id===id?{...invoice,status}:invoice));return}void runAction(`/api/v1/invoices/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({status})})};
   const saveTradeSetting=(key:string,value:string,submit:boolean)=>{if(!currentUser)return;void runAction("/api/v1/trade-settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({tradeId:currentUser.tradeId,key,value,submit})})};
   const validateTradeSetting=(id:string)=>{void runAction(`/api/v1/trade-settings/${id}/validate`,{method:"PATCH",headers:{"content-type":"application/json"},body:"{}"})};
-  const addMilestone=(projectId:string,title:string,dueAt?:string)=>{void runAction(`/api/v1/projects/${projectId}/milestones`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,dueAt})})};
-  const milestoneStatus=(id:string,status:string)=>{void runAction(`/api/v1/milestones/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({status})})};
+  const addMilestone=(projectId:string,title:string,dueAt?:string)=>{if(localProjectSimulation&&projectId===localDemoProjectId){setLocalDemoMilestones(items=>[...items,{id:`SIM-JALON-${Date.now()}`,projectId,title,dueAt,status:"planned"}]);return}void runAction(`/api/v1/projects/${projectId}/milestones`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,dueAt})})};
+  const milestoneStatus=(id:string,status:string)=>{if(localProjectSimulation&&id.startsWith("SIM-JALON-")){setLocalDemoMilestones(items=>items.map(item=>item.id===id?{...item,status}:item));return}void runAction(`/api/v1/milestones/${id}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({status})})};
   if (!currentUser) return <ProductionAccessScreen status={accessStatus==="ready"?"error":accessStatus} identity={identity} trades={trades} pendingInfo={pendingInfo} error={actionMessage} onRefresh={()=>void loadSession()}/>;
-  const viewedUser = canUseLocalEditor && previewRole ? { ...currentUser, role: previewRole } : currentUser;
-  const shared: MvpSharedProps = { quotes, onCreateQuote: createQuote, onTransmitQuote: transmitQuote, onAcceptQuote: acceptQuote, onQuoteDecision:quoteDecision, acceptedProjects, freelancer, onUpdateFreelancer: updateFreelancer, freelanceFolders, mandataireFolders, onCreateFolder: createFolder, onAddSharedFile: addSharedFile, currentUser: viewedUser, trades, users, applications, membershipRequests, adminInvitations, invoices, onInvoiceStatus:updateInvoice, tradeSettings, onSaveTradeSetting:saveTradeSetting, onValidateTradeSetting:validateTradeSetting, milestones, onAddMilestone:addMilestone, onMilestoneStatus:milestoneStatus, onCreateTrade:createTrade, onInviteAdmin:inviteAdmin, onDecideAdminInvitation:decideAdminInvitation, onDeleteAdminInvitation:deleteAdminInvitation, onAssignAdmin:assignAdmin, onCreateMember:createMember, onUserStatus:updateUserStatus, onDeleteUser:deleteUser, onDeleteTrade:deleteTrade, onApplyToMission:applyToMission, onSelectFreelancer:selectFreelancer, onProjectAction:projectAction, onCreateMembershipRequest:createMembershipRequest, onConfirmMembership:confirmMembership, onDecideMembership:decideMembership };
+  const viewedUser = localProjectSimulation
+    ? role === "Admin métier"
+      ? { id: localDemoAdminId, name: "Alex Martin", role: "Admin métier" as const, tradeId: localDemoTradeId, tradeName: "R&D Horlogerie — Simulation", status: "active" }
+      : role === "Mandataire"
+        ? { id: localDemoMandataireId, name: "Sophie Laurent", role: "Mandataire" as const, tradeId: localDemoTradeId, tradeName: "R&D Horlogerie — Simulation", status: "active" }
+        : { id: localDemoFreelancerId, name: localDemoFreelancer.name, role: "Freelance" as const, tradeId: localDemoTradeId, tradeName: "R&D Horlogerie — Simulation", status: "active", projectClass: localDemoFreelancer.projectClass, credits: localDemoFreelancer.credits, note: localDemoFreelancer.note }
+    : canUseLocalEditor && previewRole ? { ...currentUser, role: previewRole } : currentUser;
+  const shared: MvpSharedProps = { quotes, onCreateQuote: createQuote, onTransmitQuote: transmitQuote, onAcceptQuote: acceptQuote, onQuoteDecision:quoteDecision, acceptedProjects, globalProjects, onCreateGlobalProject:createGlobalProject, onAcceptGlobalProject:acceptGlobalProject, freelancer, onUpdateFreelancer: updateFreelancer, freelanceFolders, mandataireFolders, onCreateFolder: createFolder, onAddSharedFile: addSharedFile, currentUser: viewedUser, trades, users, applications, membershipRequests, adminInvitations, invoices, onInvoiceStatus:updateInvoice, tradeSettings, onSaveTradeSetting:saveTradeSetting, onValidateTradeSetting:validateTradeSetting, milestones, onAddMilestone:addMilestone, onMilestoneStatus:milestoneStatus, onCreateTrade:createTrade, onInviteAdmin:inviteAdmin, onDecideAdminInvitation:decideAdminInvitation, onDeleteAdminInvitation:deleteAdminInvitation, onAssignAdmin:assignAdmin, onCreateMember:createMember, onUserStatus:updateUserStatus, onDeleteUser:deleteUser, onDeleteTrade:deleteTrade, onApplyToMission:applyToMission, onSelectFreelancer:selectFreelancer, onProjectAction:projectAction, onCreateMembershipRequest:createMembershipRequest, onConfirmMembership:confirmMembership, onDecideMembership:decideMembership };
+  if (localProjectSimulation) {
+    const simulatedFile: SharedFile = { id: "SIM-DOC-TRADE", name: "Guide métier", description: "Document de démonstration", fileName: "guide-metier.pdf", url: "" };
+    const simulatedTrade: PlatformTrade = { id: localDemoTradeId, name: "R&D Horlogerie — Simulation", adminName: "Alex Martin", adhesionDocument: simulatedFile };
+    const simulatedUsers: PlatformUser[] = [
+      { id: localDemoAdminId, name: "Alex Martin", role: "Admin métier", tradeId: localDemoTradeId, tradeName: simulatedTrade.name, status: "active" },
+      { id: localDemoMandataireId, name: "Sophie Laurent", role: "Mandataire", tradeId: localDemoTradeId, tradeName: simulatedTrade.name, status: "active" },
+      { id: localDemoFreelancerId, name: localDemoFreelancer.name, role: "Freelance", tradeId: localDemoTradeId, tradeName: simulatedTrade.name, status: "active", projectClass: localDemoFreelancer.projectClass, credits: localDemoFreelancer.credits, note: localDemoFreelancer.note },
+    ];
+    shared.trades = [simulatedTrade];
+    shared.users = simulatedUsers;
+    shared.quotes = [];
+    shared.acceptedProjects = [localDemoProject];
+    shared.applications = localDemoApplications;
+    shared.membershipRequests = [];
+    shared.adminInvitations = [];
+    shared.milestones = localDemoMilestones;
+    shared.invoices = localDemoInvoices;
+    shared.tradeSettings = [];
+    shared.freelancer = localDemoFreelancer;
+    shared.freelanceFolders = localDemoFreelanceFolders;
+    shared.mandataireFolders = localDemoMandataireFolders;
+  }
+  if(canUseLocalEditor&&!localProjectSimulation)shared.users=[...shared.users.filter(user=>!simulatedGlobalUsers.some(simulated=>simulated.id===user.id)),...simulatedGlobalUsers];
+  if(canUseLocalEditor){
+    const simulatedProjects=localDemoGlobalProjects.map(project=>{
+      const participants=project.participants.map(person=>person.userId===localDemoGlobalAdminId?{...person,userId:currentUser!.id,name:currentUser!.name}:person);
+      return {...project,createdBy:project.createdBy===localDemoGlobalAdminId?currentUser!.id:project.createdBy,creatorName:project.createdBy===localDemoGlobalAdminId?currentUser!.name:project.creatorName,participants,myStatus:participants.find(person=>person.userId===localPreviewUserId)?.status||null};
+    });
+    shared.globalProjects=[...globalProjects.filter(project=>!project.id.startsWith("SIM-GLOBAL-")), ...simulatedProjects];
+  }
+  const visibleNotifications:{id:string;title:string;message:string;target_path?:string;read_at?:string}[]=canUseLocalEditor?[...notifications,...shared.globalProjects.flatMap(project=>{
+    const participant=project.participants.find(person=>person.userId===localPreviewUserId&&person.status==="pending");
+    return participant?[{id:`${project.id}-invitation`,title:"Invitation à un projet",message:`Vous êtes invité à prendre part au projet « ${project.title} ».`,target_path:`/global-projects/${project.id}`}]:[];
+  })]:notifications;
   return (
     <main className="app-shell" style={{ "--accent": accent } as React.CSSProperties}>
       {canUseLocalEditor && (
         <section className="local-editor-bar" aria-label="Mode édition local">
           <div className="local-editor-status">
             <strong>MODE ÉDITION · VERSION LOCALE</strong>
-            <span>Aperçu visuel uniquement · session Admin Eurêka · actions désactivées</span>
+            <span>{localProjectSimulation ? "Projet fictif partagé entre les espaces · changements temporaires au navigateur" : "Session Admin Eurêka · données réelles non modifiées"}</span>
           </div>
           <label>
             Espace à prévisualiser
@@ -5481,15 +5688,15 @@ export default function Home() {
       <section className="content">
         <div className="content-account-slot">
           <button className="account-trigger" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>
-            <i>{currentUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
-            <span><b>{currentUser.name}</b><small>Mon compte</small></span>
+            <i>{viewedUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
+            <span><b>{viewedUser.name}</b><small>Mon compte</small></span>
             <em>⌄</em>
           </button>
           {accountOpen && (
             <section className="account-menu visible-account-menu">
               <div className="account-menu-head">
-                <i>{currentUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
-                <span><b>{currentUser.name}</b><small>{role} · {currentUser.tradeName}</small></span>
+                <i>{viewedUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
+                <span><b>{viewedUser.name}</b><small>{role} · {viewedUser.tradeName}</small></span>
                 <button onClick={() => setAccountOpen(false)}>×</button>
               </div>
               <button onClick={() => { setAccountPanel("profil"); setAccountOpen(false); }}><span>◎</span><b>{role === "Mandataire" ? "Profil de l’entreprise" : "Mon profil"}</b><i>›</i></button>
@@ -5502,9 +5709,9 @@ export default function Home() {
         <header>
           <div className="header-account-area">
             <button className="account-trigger" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>
-              <i>{currentUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
+              <i>{viewedUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
               <span>
-                <b>{currentUser.name}</b>
+                <b>{viewedUser.name}</b>
                 <small>{role}</small>
               </span>
               <em>⌄</em>
@@ -5512,8 +5719,8 @@ export default function Home() {
             {accountOpen && (
               <section className="account-menu">
                 <div className="account-menu-head">
-                  <i>{currentUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
-                  <span><b>{currentUser.name}</b><small>{role} · {currentUser.tradeName}</small></span>
+                  <i>{viewedUser.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i>
+                  <span><b>{viewedUser.name}</b><small>{role} · {viewedUser.tradeName}</small></span>
                   <button onClick={() => setAccountOpen(false)}>×</button>
                 </div>
                 <button onClick={() => { setAccountPanel("profil"); setAccountOpen(false); }}><span>◎</span><b>{role === "Mandataire" ? "Profil de l’entreprise" : "Mon profil"}</b><i>›</i></button>
@@ -5534,19 +5741,17 @@ export default function Home() {
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Rechercher…" />
               </label>
             )}
-            {role !== "Freelance" && (
-              <button className="round" onClick={() => setNoticeOpen(!noticeOpen)} aria-label="Notifications">
-                ♢{notifications.some(item=>!item.read_at)&&<b>{notifications.filter(item=>!item.read_at).length}</b>}
-              </button>
-            )}
+            <button className="round" onClick={() => setNoticeOpen(!noticeOpen)} aria-label="Notifications">
+                ♢{visibleNotifications.some(item=>!item.read_at)&&<b>{visibleNotifications.filter(item=>!item.read_at).length}</b>}
+            </button>
             <button className="primary" onClick={() => setActive(role === "Freelance" ? "Tableau de missions" : role === "Mandataire" ? "Demandes de devis" : role === "Admin Eurêka" ? "Métiers" : "Projets")}>
               {role === "Freelance" ? "Voir les missions" : role === "Mandataire" ? "＋ Nouvelle demande" : role === "Admin Eurêka" ? "Voir les métiers" : "Voir les projets"}
             </button>
           </div>
-          {role !== "Freelance" && noticeOpen && (
+          {noticeOpen && (
             <div className="notifications">
               <b>Notifications</b>
-              {notifications.length?notifications.slice(0,8).map(item=><button key={item.id} onClick={()=>{if(!item.read_at)void runAction(`/api/v1/notifications/${item.id}`,{method:"PATCH"});setNoticeOpen(false)}}><b>{item.title}</b><span>{item.message}</span></button>):<p>Aucune notification.</p>}
+              {visibleNotifications.length?visibleNotifications.slice(0,8).map(item=><button key={item.id} onClick={()=>{if(!item.read_at){setNotifications(current=>current.map(notification=>notification.id===item.id?{...notification,read_at:new Date().toISOString()}:notification));if(!localDevelopment)void runAction(`/api/v1/notifications/${item.id}`,{method:"PATCH"})}const projectId=item.target_path?.match(/^\/global-projects\/([^/]+)$/)?.[1];if(projectId){setRequestedGlobalProjectId(projectId);setActive("Projets")}setNoticeOpen(false)}}><b>{item.title}</b><span>{item.message}</span></button>):<p>Aucune notification.</p>}
             </div>
           )}
         </header>
@@ -5564,7 +5769,7 @@ export default function Home() {
             </section>
           </div>
         )}
-        {role === "Admin Eurêka" ? <AdminEurekaPortal active={active} onNavigate={setActive} shared={shared}/> : role === "Admin métier" ? <SectionPage active={active} onNavigate={setActive} shared={shared} /> : <UserPortal role={role} active={active} onNavigate={setActive} shared={shared} />}
+        {role === "Admin Eurêka" ? <AdminEurekaPortal active={active} onNavigate={setActive} shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/> : role === "Admin métier" ? <><SectionPage active={active} onNavigate={setActive} shared={shared} />{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</> : <><UserPortal role={role} active={active} onNavigate={setActive} shared={shared}/>{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</>}
         {false &&
           (active === "Accueil" ? (
             <>

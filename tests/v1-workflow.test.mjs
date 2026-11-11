@@ -12,7 +12,7 @@ class Statement {
   async run(){const result=this.db.prepare(this.sql).run(...this.values);return {meta:{changes:Number(result.changes)}}}
 }
 class D1 {
-  constructor(){this.sqlite=new DatabaseSync(":memory:");for(const name of ["0000_eureka_v1.sql","0001_eureka_accounts.sql","0002_eureka_identifiers.sql"])this.sqlite.exec(readFileSync(new URL(`../drizzle/${name}`,import.meta.url),"utf8"))}
+  constructor(){this.sqlite=new DatabaseSync(":memory:");for(const name of ["0000_eureka_v1.sql","0001_eureka_accounts.sql","0002_eureka_identifiers.sql","0003_global_projects.sql"])this.sqlite.exec(readFileSync(new URL(`../drizzle/${name}`,import.meta.url),"utf8"))}
   prepare(sql){return new Statement(this.sqlite,sql)}
   async batch(statements){this.sqlite.exec("BEGIN");try{const results=[];for(const statement of statements)results.push(await statement.run());this.sqlite.exec("COMMIT");return results}catch(error){this.sqlite.exec("ROLLBACK");throw error}}
 }
@@ -75,6 +75,38 @@ test("comptes Eurêka, permissions et workflow persistant",async()=>{
   const duplicate=await call(runtime,"POST",`/missions/${accepted.data.missionId}/assign`,mandataire.account,{applicationId:applied.data.id});assert.notEqual(duplicate.status,201);
   const project=runtime.DB.sqlite.prepare("SELECT * FROM projects WHERE id=?").get(assigned.data.projectId);assert.equal(project.trade_id,tradeId);assert.equal(project.freelancer_membership_id,freelance.membership.id);
   assert.equal(runtime.DB.sqlite.prepare("SELECT reserved_credits FROM trade_memberships WHERE id=?").get(freelance.membership.id).reserved_credits,30);
+});
+
+test("projets globaux : invitations, accès participants et activation après tous les accords",async()=>{
+  const runtime=env();
+  const owner=await register(runtime,"Admin Eurêka","fael@example.ch","Motdepasse1",{ownerCode:"owner-test-code"});
+  const firstParticipant=await register(runtime,"Participant Un","un@example.ch","Motdepasse2");
+  const secondParticipant=await register(runtime,"Participant Deux","deux@example.ch","Motdepasse3");
+  const outsider=await register(runtime,"Personne externe","externe@example.ch","Motdepasse4");
+  const participantIds=["un@example.ch","deux@example.ch"].map(email=>runtime.DB.sqlite.prepare("SELECT id FROM users WHERE email=?").get(email).id);
+  const create=await call(runtime,"POST","/global-projects",owner,{title:"Projet transverse",summary:"Résumé confidentiel aux participants.",participantIds});
+  assert.equal(create.status,201);
+  const projectId=create.data.id;
+  assert.equal(runtime.DB.sqlite.prepare("SELECT status FROM global_projects WHERE id=?").get(projectId).status,"pending");
+  assert.equal((await call(runtime,"POST","/global-projects",firstParticipant,{title:"Interdit",summary:"Non",participantIds:[participantIds[1]]})).status,403);
+  const firstSession=(await call(runtime,"GET","/session",firstParticipant)).data;
+  assert.equal(firstSession.globalProjects[0].title,"Projet transverse");
+  assert.equal(firstSession.globalProjects[0].my_status,"pending");
+  assert.ok(firstSession.notifications.some(notification=>notification.target_path===`/global-projects/${projectId}`));
+  assert.equal((await call(runtime,"GET","/session",outsider)).data.globalProjects.length,0);
+  assert.equal(runtime.DB.sqlite.prepare("SELECT COUNT(*) count FROM notifications WHERE kind='global_project_invitation'").get().count,2);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/accept`,outsider,{})).status,403);
+  const firstAcceptance=await call(runtime,"POST",`/global-projects/${projectId}/accept`,firstParticipant,{});
+  assert.equal(firstAcceptance.status,200);
+  assert.equal(firstAcceptance.data.status,"pending");
+  assert.equal(runtime.DB.sqlite.prepare("SELECT status FROM global_projects WHERE id=?").get(projectId).status,"pending");
+  const secondAcceptance=await call(runtime,"POST",`/global-projects/${projectId}/accept`,secondParticipant,{});
+  assert.equal(secondAcceptance.status,200);
+  assert.equal(secondAcceptance.data.status,"active");
+  assert.equal(runtime.DB.sqlite.prepare("SELECT COUNT(*) count FROM global_project_participants WHERE project_id=? AND status='accepted'").get(projectId).count,3);
+  assert.ok((await call(runtime,"GET","/session",owner)).data.notifications.some(notification=>notification.kind==="global_project_ready"));
+  assert.equal(runtime.DB.sqlite.prepare("SELECT COUNT(*) count FROM notifications WHERE kind='global_project_ready'").get().count,3);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/accept`,secondParticipant,{})).data.status,"active");
 });
 
 test("inscriptions publiques, validation métier et isolation serveur",async()=>{
