@@ -199,6 +199,13 @@ async function sessionState(env: V1Env, auth: Auth) {
   const pendingAdmin=auth.globalAdmin?null:await env.DB.prepare("SELECT ai.id,ai.role,ai.trade_id,t.name trade_name FROM admin_invitations ai LEFT JOIN trades t ON t.id=ai.trade_id WHERE ai.email=? COLLATE NOCASE AND ai.status='pending' AND ai.role IN ('admin_eureka','admin_metier') ORDER BY ai.created_at DESC LIMIT 1").bind(auth.email).first();
   const adminInvitations=auth.globalAdmin?(await env.DB.prepare("SELECT ai.id,ai.display_name,ai.email,CASE WHEN ai.role='specialiste_metier' THEN 'admin_metier' ELSE ai.role END role,ai.trade_id,t.name trade_name,ai.status,ai.created_at,COALESCE((SELECT u.id FROM users u WHERE ai.email IS NOT NULL AND u.email=ai.email COLLATE NOCASE LIMIT 1),(SELECT u.id FROM users u WHERE lower(trim(u.display_name))=lower(trim(ai.display_name)) AND (SELECT COUNT(*) FROM users ux WHERE lower(trim(ux.display_name))=lower(trim(ai.display_name)))=1 LIMIT 1)) account_user_id FROM admin_invitations ai LEFT JOIN trades t ON t.id=ai.trade_id WHERE ai.status IN ('pending','awaiting_email') ORDER BY ai.created_at DESC").all()).results:[];
   const notifications = (await env.DB.prepare("SELECT id,kind,title,message,target_path,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50").bind(auth.id).all()).results;
+  const globalProjects = auth.globalAdmin
+    ? (await env.DB.prepare("SELECT gp.*,u.display_name creator_name FROM global_projects gp JOIN users u ON u.id=gp.created_by ORDER BY gp.created_at DESC").all<Record<string,unknown>>()).results
+    : (await env.DB.prepare("SELECT gp.*,u.display_name creator_name FROM global_projects gp JOIN users u ON u.id=gp.created_by WHERE gp.created_by=? OR EXISTS (SELECT 1 FROM global_project_participants gpp WHERE gpp.project_id=gp.id AND gpp.user_id=?) ORDER BY gp.created_at DESC").bind(auth.id,auth.id).all<Record<string,unknown>>()).results;
+  for(const project of globalProjects){
+    project.participants=(await env.DB.prepare("SELECT gpp.user_id,u.display_name,u.email,gpp.status,gpp.invited_at,gpp.accepted_at,CASE WHEN EXISTS (SELECT 1 FROM global_roles gr WHERE gr.user_id=u.id AND gr.role='admin_eureka') THEN 'Admin Eurêka' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role IN ('admin_metier','specialiste_metier')) THEN 'Admin métier' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role='mandataire') THEN 'Mandataire' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role='freelance') THEN 'Freelance' ELSE 'Membre' END role FROM global_project_participants gpp JOIN users u ON u.id=gpp.user_id WHERE gpp.project_id=? ORDER BY CASE WHEN gpp.user_id=? THEN 0 ELSE 1 END,u.display_name").bind(project.id,auth.id).all()).results;
+    project.my_status=project.created_by===auth.id?"accepted":(project.participants as Record<string,unknown>[]).find(participant=>participant.user_id===auth.id)?.status||null;
+  }
   const scope = auth.globalAdmin ? "1=1" : tradeIds.length ? `trade_id IN (${tradeIds.map(()=>"?").join(",")})` : "0=1";
   const scopeBindings = auth.globalAdmin ? [] : tradeIds;
   let quoteRequests = (await env.DB.prepare(`SELECT * FROM quote_requests WHERE ${scope} ORDER BY created_at DESC`).bind(...scopeBindings).all()).results as Record<string,unknown>[];
@@ -225,7 +232,7 @@ async function sessionState(env: V1Env, auth: Auth) {
     }
   }
   const visibleProjectIds=new Set(projects.map((project:any)=>project.id));milestones=milestones.filter((milestone:any)=>visibleProjectIds.has(milestone.project_id));
-  return { currentUser:{ id:auth.id,email:auth.email,eurekaEmail:ownEurekaEmail,name:auth.name,globalAdmin:auth.globalAdmin }, memberships:ownMemberships,trades,users,membershipRequests:requests,pendingAdminInvitation:pendingAdmin,adminInvitations,quoteRequests,quotes,missions,applications,projects,milestones,invoices,tradeSettings,shareFolders,shareDocuments,workflowDocuments,notifications };
+  return { currentUser:{ id:auth.id,email:auth.email,eurekaEmail:ownEurekaEmail,name:auth.name,globalAdmin:auth.globalAdmin }, memberships:ownMemberships,trades,users,membershipRequests:requests,pendingAdminInvitation:pendingAdmin,adminInvitations,quoteRequests,quotes,missions,applications,projects,milestones,invoices,tradeSettings,shareFolders,shareDocuments,workflowDocuments,notifications,globalProjects };
 }
 
 async function handleTradeSettings(request:Request,env:V1Env,auth:Auth,settingId?:string,action?:string){
@@ -540,6 +547,59 @@ async function handleNotifications(request: Request, env: V1Env, auth: Auth, not
   if(request.method==="PATCH"&&notificationId){const result=await env.DB.prepare("UPDATE notifications SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?").bind(now(),notificationId,auth.id).run();if(!result.meta.changes)return fail("Notification introuvable.",404);return reply({id:notificationId,read:true});}return fail("Méthode non autorisée.",405);
 }
 
+async function handleGlobalProjects(request:Request,env:V1Env,auth:Auth,projectId?:string,action?:string){
+  if(request.method==="POST"&&!projectId){
+    if(!auth.globalAdmin)return fail("Accès réservé à l’Admin Eurêka.",403,"forbidden");
+    const input=await body(request);
+    const title=cleanText(input?.title,160);
+    const summary=cleanText(input?.summary,3000);
+    if(!title||!summary||!Array.isArray(input?.participantIds))return fail("Nom, résumé et participants obligatoires.",400,"validation_error");
+    const participantIds=[...new Set((input.participantIds as unknown[]).map(value=>typeof value==="string"?cleanText(value,80):"").filter(value=>value&&value!==auth.id))];
+    if(!participantIds.length||participantIds.length>50)return fail("Sélectionnez entre 1 et 50 autres participants.",400,"invalid_participants");
+    const activeUsers=(await env.DB.prepare(`SELECT id,display_name FROM users WHERE status='active' AND id IN (${participantIds.map(()=>"?").join(",")})`).bind(...participantIds).all<{id:string;display_name:string}>()).results;
+    if(activeUsers.length!==participantIds.length)return fail("Un ou plusieurs participants ne sont plus actifs.",409,"participant_unavailable");
+    const projectIdNew=id("gprj");
+    const statements=[
+      env.DB.prepare("INSERT INTO global_projects (id,title,summary,status,created_by) VALUES (?,?,?,'pending',?)").bind(projectIdNew,title,summary,auth.id),
+      env.DB.prepare("INSERT INTO global_project_participants (project_id,user_id,status,accepted_at) VALUES (?,?,'accepted',?)").bind(projectIdNew,auth.id,now()),
+      ...activeUsers.flatMap(participant=>[
+        env.DB.prepare("INSERT INTO global_project_participants (project_id,user_id,status) VALUES (?,?,'pending')").bind(projectIdNew,participant.id),
+        env.DB.prepare("INSERT INTO notifications (id,trade_id,user_id,kind,title,message,target_path) VALUES (?,NULL,?,?,?,?,?)").bind(id("not"),participant.id,"global_project_invitation","Invitation à un projet",`${auth.name} vous invite à prendre part au projet « ${title} ».`,`/global-projects/${projectIdNew}`),
+      ]),
+    ];
+    await env.DB.batch(statements);
+    await audit(env,auth,"global_project.created","global_project",projectIdNew,null,{participantCount:participantIds.length});
+    return reply({id:projectIdNew,title,status:"pending"},201);
+  }
+  if(request.method==="POST"&&projectId&&action==="accept"){
+    const project=await env.DB.prepare("SELECT * FROM global_projects WHERE id=?").bind(projectId).first<Record<string,unknown>>();
+    if(!project)return fail("Projet introuvable.",404);
+    const participant=await env.DB.prepare("SELECT status FROM global_project_participants WHERE project_id=? AND user_id=?").bind(projectId,auth.id).first<{status:string}>();
+    if(!participant)return fail("Vous ne participez pas à ce projet.",403,"forbidden");
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    if(participant.status==="accepted")return reply({id:projectId,status:project.status,accepted:true});
+    const results=await env.DB.batch([
+      env.DB.prepare("UPDATE global_project_participants SET status='accepted',accepted_at=? WHERE project_id=? AND user_id=? AND status='pending'").bind(now(),projectId,auth.id),
+      env.DB.prepare("UPDATE global_projects SET status='active',updated_at=? WHERE id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM global_project_participants WHERE project_id=? AND status='pending')").bind(now(),projectId,projectId),
+    ]);
+    if(!results[0].meta.changes){
+      const current=await env.DB.prepare("SELECT status FROM global_project_participants WHERE project_id=? AND user_id=?").bind(projectId,auth.id).first<{status:string}>();
+      if(current?.status==="accepted")return reply({id:projectId,status:project.status,accepted:true});
+      return fail("L’invitation a déjà été traitée.",409,"invitation_already_processed");
+    }
+    if(results[1].meta.changes){
+      const participants=(await env.DB.prepare("SELECT user_id FROM global_project_participants WHERE project_id=?").bind(projectId).all<{user_id:string}>()).results;
+      for(const row of participants)await notify(env,row.user_id,null,"global_project_ready","Projet confirmé",`Tous les participants ont rejoint le projet « ${project.title} ».`,`/global-projects/${projectId}`);
+      await audit(env,auth,"global_project.activated","global_project",projectId,null);
+    }else{
+      await audit(env,auth,"global_project.participant_accepted","global_project",projectId,null);
+    }
+    const updated=await env.DB.prepare("SELECT status FROM global_projects WHERE id=?").bind(projectId).first<{status:string}>();
+    return reply({id:projectId,status:updated?.status||"pending",accepted:true});
+  }
+  return fail("Méthode non autorisée.",405);
+}
+
 async function handleInvoices(request: Request, env: V1Env, auth: Auth, invoiceId: string) {
   if(request.method!=="PATCH")return fail("Méthode non autorisée.",405);const invoice=await env.DB.prepare("SELECT * FROM invoices WHERE id=?").bind(invoiceId).first<Record<string,unknown>>();if(!invoice)return fail("Facture introuvable.",404);if(!(await requireTradeRole(env,auth,String(invoice.trade_id),["admin_metier"])))return fail("Accès refusé.",403);const input=await body(request);const status=cleanText(input?.status,40);if(!invoiceTransitionAllowed(String(invoice.status),status))return fail("Transition de facturation invalide.",409,"invalid_transition");await env.DB.batch([env.DB.prepare("UPDATE invoices SET status=?,issue_date=COALESCE(issue_date,CASE WHEN ?='invoice_sent' THEN ? END),confirmed_by=?,updated_at=? WHERE id=?").bind(status,status,now().slice(0,10),auth.id,now(),invoiceId),env.DB.prepare("INSERT INTO invoice_events (id,invoice_id,actor_user_id,old_status,new_status,note) VALUES (?,?,?,?,?,?)").bind(id("ine"),invoiceId,auth.id,invoice.status,status,cleanText(input?.note,1000)||null)]);await audit(env,auth,"invoice.status_changed","invoice",invoiceId,String(invoice.trade_id),{from:invoice.status,to:status});return reply({id:invoiceId,status});
 }
@@ -677,6 +737,7 @@ export async function handleV1Api(request: Request, env: V1Env): Promise<Respons
     if(parts[0]==="members"&&parts[1])return handleMemberUpdate(request,env,auth,parts[1]);
     if(parts[0]==="quote-requests")return handleQuoteRequests(request,env,auth);
     if(parts[0]==="quotes")return handleQuotes(request,env,auth,parts[1],parts[2]);
+    if(parts[0]==="global-projects")return handleGlobalProjects(request,env,auth,parts[1],parts[2]);
     if(parts[0]==="missions"&&parts[1]&&parts[2]==="applications")return handleApplication(request,env,auth,parts[1]);
     if(parts[0]==="missions"&&parts[1]&&parts[2]==="assign")return handleAssignment(request,env,auth,parts[1]);
     if(parts[0]==="projects"&&parts[1]&&parts[2]==="milestones")return handleMilestones(request,env,auth,parts[1]);
