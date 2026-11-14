@@ -7,6 +7,8 @@ const navByRole: Record<string, string[][]> = {
   "Admin Eurêka": [
     ["Accueil", "⌂"],
     ["Projets", "◇"],
+    ["Mes tâches", "✓"],
+    ["Mon bloc note", "▤"],
     ["Métiers", "◇"],
     ["Utilisateurs", "♙"],
     ["Finance", "€"],
@@ -14,6 +16,8 @@ const navByRole: Record<string, string[][]> = {
   "Admin métier": [
     ["Accueil", "⌂"],
     ["Projets", "◇"],
+    ["Mes tâches", "✓"],
+    ["Mon bloc note", "▤"],
     ["Demandes de devis", "₣"],
     ["Facturation", "CHF"],
     ["Freelances", "♙"],
@@ -26,12 +30,16 @@ const navByRole: Record<string, string[][]> = {
   Freelance: [
     ["Accueil", "⌂"],
     ["Projets", "◇"],
+    ["Mes tâches", "✓"],
+    ["Mon bloc note", "▤"],
     ["Tableau de missions", "☆"],
     ["Documents", "▤"],
   ],
   Mandataire: [
     ["Accueil", "⌂"],
     ["Projets", "◇"],
+    ["Mes tâches", "✓"],
+    ["Mon bloc note", "▤"],
     ["Demandes de devis", "₣"],
     ["Devis", "✓"],
     ["Postulations", "♙"],
@@ -69,7 +77,14 @@ type Invoice = { id:string; reference:string; projectTitle:string; amount:number
 type TradeSetting = { id:string; key:string; value:string; status:string };
 type ProjectMilestone={id:string;projectId:string;title:string;dueAt?:string;status:string};
 type GlobalProjectParticipant={userId:string;name:string;email?:string;role:string;status:"pending"|"accepted";invitedAt?:string;acceptedAt?:string};
-type GlobalProject={id:string;title:string;summary:string;status:"pending"|"active"|"archived";createdBy:string;creatorName:string;createdAt:string;myStatus:"pending"|"accepted"|null;participants:GlobalProjectParticipant[]};
+type GlobalProjectMilestone={id:string;title:string;dueAt?:string};
+type GlobalProjectTaskPriority="low"|"normal"|"high"|"urgent";
+type GlobalProjectTaskDocument={id:string;originalName:string;mimeType:string;sizeBytes:number;uploadedBy?:string;createdAt:string;downloadUrl:string};
+type GlobalProjectTaskEvent={id:string;eventType:string;summary:string;actorName:string;createdAt:string};
+type GlobalProjectSubject={id:string;name:string};
+type GlobalProjectNote={id:string;projectId?:string;projectTitle?:string;title:string;subject:string;description:string;authorUserId:string;authorName:string;createdAt:string};
+type GlobalProjectTask={id:string;title:string;subject:string;description:string;dueAt?:string;assigneeUserId?:string;assigneeName?:string;status:"todo"|"in_progress"|"done";priority:GlobalProjectTaskPriority;documents:GlobalProjectTaskDocument[];activity:GlobalProjectTaskEvent[]};
+type GlobalProject={id:string;title:string;summary:string;status:"pending"|"active"|"archived";createdBy:string;creatorName:string;createdAt:string;myStatus:"pending"|"accepted"|null;participants:GlobalProjectParticipant[];milestones:GlobalProjectMilestone[];taskSubjects:GlobalProjectSubject[];notes?:GlobalProjectNote[];tasks:GlobalProjectTask[]};
 
 const localDemoTradeId = "local-demo-trade";
 const localDemoProjectId = "SIM-PROJET-001";
@@ -78,6 +93,8 @@ const localDemoGlobalAdminId = "SIM-GLOBAL-ADMIN";
 const localDemoFreelancerId = "local-demo-freelancer";
 const localDemoMandataireId = "local-demo-mandataire";
 const localDemoAdminId = "local-demo-admin";
+const globalTaskStatusLabels={todo:"À faire",in_progress:"En cours",done:"Terminée"} as const;
+const globalTaskPriorityLabels={urgent:"1 — Urgente",high:"2 — Haute",normal:"3 — Normale",low:"4 — Basse"} as const;
 
 type MvpSharedProps = {
   quotes: QuoteRequest[];
@@ -87,8 +104,17 @@ type MvpSharedProps = {
   onQuoteDecision: (id: string, decision:"revision"|"refuse", message?:string) => void;
   acceptedProjects: AcceptedProject[];
   globalProjects:GlobalProject[];
+  globalNotes:GlobalProjectNote[];
   onCreateGlobalProject:(title:string,summary:string,participantIds:string[])=>Promise<boolean>;
+  onCreateGlobalNote:(note:{projectId?:string;title:string;subject:string;description:string})=>Promise<boolean>;
   onAcceptGlobalProject:(projectId:string)=>Promise<boolean>;
+  onCreateGlobalMilestone:(projectId:string,title:string,dueAt?:string)=>Promise<boolean>;
+  onCreateGlobalTask:(projectId:string,task:{title:string;subject:string;description:string;priority:GlobalProjectTaskPriority;dueAt?:string;assigneeUserId?:string})=>Promise<boolean>;
+  onCreateGlobalTaskSubject:(projectId:string,name:string)=>Promise<boolean>;
+  onClaimGlobalTask:(projectId:string,taskId:string)=>Promise<boolean>;
+  onUpdateGlobalTask:(projectId:string,taskId:string,update:{status?:GlobalProjectTask["status"];priority?:GlobalProjectTaskPriority})=>Promise<boolean>;
+  onAddGlobalTaskComment:(projectId:string,taskId:string,comment:string)=>Promise<boolean>;
+  onUploadGlobalTaskDocument:(projectId:string,taskId:string,file:File)=>Promise<boolean>;
   freelancer: FreelancerState;
   onUpdateFreelancer: (next: FreelancerState) => void;
   freelanceFolders: SharedFolder[];
@@ -1681,29 +1707,254 @@ function GlobalProjectsBoard({shared,requestedProjectId,onConsumeRequestedProjec
     try{if(await shared.onCreateGlobalProject(title.trim(),summary.trim(),participantIds)){setCreateOpen(false);setTitle("");setSummary("");setParticipantIds([])}}
     finally{setSaving(false)}
   };
-  const tabs=["Vue d’ensemble","Cahier des charges","Participants","Documents","Suivi"];
-  const globalTimelineStart=detailProject?new Date(detailProject.createdAt):new Date();
+  const tabs=["Vue d’ensemble","Cahier des charges","Tâches","Bloc Note","Documents","Suivi"];
+  return <section className="mvp-workspace global-projects-board">
+    <div className="mvp-board-head"><div><span>PROJETS EURÊKA GROUP</span><h3>Projets transversaux</h3><p>Projets réunissant des membres de plusieurs espaces de la plateforme.</p></div>{isGlobalAdmin&&<button type="button" onClick={()=>setCreateOpen(true)}>＋ Nouveau projet</button>}</div>
+    {!shared.globalProjects.length?<p className="mvp-empty">{isGlobalAdmin?"Aucun projet global. Créez un projet pour inviter des participants.":"Aucun projet ne vous a encore été proposé."}</p>:<div className="global-project-list">{shared.globalProjects.map(project=><button type="button" className="global-project-card" key={project.id} onClick={()=>{setSelectedProjectId(project.id);setProjectTab("Vue d’ensemble")}}><span className={`global-project-status ${project.status}`}>{project.status==="active"?"Projet confirmé":project.status==="archived"?"Archivé":"En attente des participants"}</span><strong>{project.title}</strong><span>{project.summary}</span><small>{project.participants.filter(person=>person.status==="accepted").length} / {project.participants.length} participants confirmés · Créé par {project.creatorName}</small><b>Ouvrir le projet　›</b></button>)}</div>}
+    {createOpen&&<div className="modal-backdrop" onMouseDown={()=>!saving&&setCreateOpen(false)}><section className="modal global-project-create-modal" onMouseDown={event=>event.stopPropagation()}><div className="modal-head"><div><span>ADMIN EURÊKA · NOUVEAU PROJET</span><h2>Créer un projet</h2></div><button type="button" aria-label="Fermer" onClick={()=>setCreateOpen(false)}>×</button></div><label>Nom du projet<input autoFocus maxLength={160} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Ex. Refonte de la plateforme"/></label><label>Résumé du projet<textarea maxLength={3000} rows={4} value={summary} onChange={event=>setSummary(event.target.value)} placeholder="Présentez brièvement l’objectif et le périmètre du projet."/></label><fieldset className="global-project-people"><legend>Participants à inviter</legend>{selectableUsers.length?selectableUsers.map(user=><label key={user.id}><input type="checkbox" checked={participantIds.includes(user.id)} onChange={event=>setParticipantIds(current=>event.target.checked?[...current,user.id]:current.filter(id=>id!==user.id))}/><span><b>{user.name}</b><small>{user.role} · {user.tradeName}</small></span></label>):<p>Aucun autre compte actif disponible.</p>}</fieldset><p className="global-project-hint">Les personnes invitées recevront une notification. Le projet sera confirmé lorsque chacun aura accepté.</p><div className="modal-actions"><button type="button" disabled={saving} onClick={()=>setCreateOpen(false)}>Annuler</button><button type="button" className="primary" disabled={saving||!title.trim()||!summary.trim()||!participantIds.length} onClick={()=>void createProject()}>{saving?"Création…":"Créer et inviter"}</button></div></section></div>}
+    {detailProject&&<GlobalProjectDetailModal
+      key={detailProject.id}
+      project={detailProject}
+      currentUserId={shared.currentUser.id}
+      isGlobalAdmin={isGlobalAdmin}
+      tabs={tabs}
+      activeTab={projectTab}
+      onTabChange={setProjectTab}
+      onClose={()=>setSelectedProjectId(null)}
+      onAccept={()=>shared.onAcceptGlobalProject(detailProject.id)}
+      onCreateMilestone={shared.onCreateGlobalMilestone}
+      onCreateNote={shared.onCreateGlobalNote}
+      onCreateTask={shared.onCreateGlobalTask}
+      onCreateTaskSubject={shared.onCreateGlobalTaskSubject}
+      onClaimTask={shared.onClaimGlobalTask}
+      onUpdateTask={shared.onUpdateGlobalTask}
+      onAddTaskComment={shared.onAddGlobalTaskComment}
+      onUploadTaskDocument={shared.onUploadGlobalTaskDocument}
+    />}
+  </section>;
+}
+
+function GlobalNoteCard({note,projectLabel}:{note:GlobalProjectNote;projectLabel?:string}){
+  const date=new Date(note.createdAt);
+  const publicationDate=Number.isNaN(date.getTime())?note.createdAt:date.toLocaleDateString("fr-CH",{day:"2-digit",month:"short",year:"numeric"});
+  return <article className="global-project-note-card">
+    <header><time dateTime={note.createdAt}>{publicationDate}</time><em>{projectLabel||note.projectTitle||"Note personnelle"}</em></header>
+    <span>{note.subject}</span><h4>{note.title}</h4><p>{note.description}</p><small>Ajoutée par {note.authorName}</small>
+  </article>;
+}
+
+function GlobalProjectDetailModal({
+  project,currentUserId,isGlobalAdmin,tabs,activeTab,onTabChange,onClose,onAccept,onCreateMilestone,onCreateNote,onCreateTask,onCreateTaskSubject,onClaimTask,onUpdateTask,onAddTaskComment,onUploadTaskDocument
+}:{
+  project:GlobalProject;
+  currentUserId:string;
+  isGlobalAdmin:boolean;
+  tabs:string[];
+  activeTab:string;
+  onTabChange:(tab:string)=>void;
+  onClose:()=>void;
+  onAccept:()=>Promise<boolean>;
+  onCreateMilestone:MvpSharedProps["onCreateGlobalMilestone"];
+  onCreateNote:MvpSharedProps["onCreateGlobalNote"];
+  onCreateTask:MvpSharedProps["onCreateGlobalTask"];
+  onCreateTaskSubject:MvpSharedProps["onCreateGlobalTaskSubject"];
+  onClaimTask:MvpSharedProps["onClaimGlobalTask"];
+  onUpdateTask:MvpSharedProps["onUpdateGlobalTask"];
+  onAddTaskComment:MvpSharedProps["onAddGlobalTaskComment"];
+  onUploadTaskDocument:MvpSharedProps["onUploadGlobalTaskDocument"];
+}) {
+  const [participantsOpen,setParticipantsOpen]=useState(false);
+  const [milestoneOpen,setMilestoneOpen]=useState(false);
+  const [noteOpen,setNoteOpen]=useState(false);
+  const [taskOpen,setTaskOpen]=useState(false);
+  const [subjectOpen,setSubjectOpen]=useState(false);
+  const [selectedTaskId,setSelectedTaskId]=useState<string|null>(null);
+  const [selectedSubjectName,setSelectedSubjectName]=useState<string|null>(null);
+  const [saving,setSaving]=useState(false);
+  const [milestoneTitle,setMilestoneTitle]=useState("");
+  const [milestoneDueAt,setMilestoneDueAt]=useState("");
+  const [noteTitle,setNoteTitle]=useState("");
+  const [noteSubject,setNoteSubject]=useState("");
+  const [noteDescription,setNoteDescription]=useState("");
+  const [taskTitle,setTaskTitle]=useState("");
+  const [taskSubject,setTaskSubject]=useState("");
+  const [taskPriority,setTaskPriority]=useState<GlobalProjectTaskPriority>("normal");
+  const [taskDescription,setTaskDescription]=useState("");
+  const [taskDueAt,setTaskDueAt]=useState("");
+  const [taskAssigneeId,setTaskAssigneeId]=useState("");
+  const [newSubjectName,setNewSubjectName]=useState("");
+  const canManage=project.status!=="archived"&&(isGlobalAdmin||project.createdBy===currentUserId||project.myStatus==="accepted");
+  const acceptedParticipants=project.participants.filter(person=>person.status==="accepted");
+  const formatDate=(date?:string)=>date?new Date(`${date}T00:00:00`).toLocaleDateString("fr-CH"):"Sans échéance";
+  const getTaskSubject=(task:GlobalProjectTask)=>task.subject?.trim()||"Général";
+  const taskSubjects=[...new Map([...project.taskSubjects,...project.tasks.map(task=>({id:getTaskSubject(task),name:getTaskSubject(task)}))].map(subject=>[subject.name.toLocaleLowerCase("fr"),subject])).values()];
+  const selectedSubject=taskSubjects.find(subject=>subject.name.toLocaleLowerCase("fr")===selectedSubjectName?.toLocaleLowerCase("fr"))||null;
+  const selectedSubjectTasks=selectedSubject?project.tasks.filter(task=>getTaskSubject(task).toLocaleLowerCase("fr")===selectedSubject.name.toLocaleLowerCase("fr")):[];
+  const selectedTask=project.tasks.find(task=>task.id===selectedTaskId)||null;
+  const globalTimelineStart=new Date(project.createdAt);
   const globalTimelineEnd=new Date(globalTimelineStart.getTime()+90*24*60*60*1000);
   const globalToday=new Date();
-  const globalTimelineProgress=detailProject?.status==="archived"?100:Math.max(0,Math.min(100,((globalToday.getTime()-globalTimelineStart.getTime())/(globalTimelineEnd.getTime()-globalTimelineStart.getTime()))*100));
+  const globalTimelineProgress=project.status==="archived"?100:Math.max(0,Math.min(100,((globalToday.getTime()-globalTimelineStart.getTime())/(globalTimelineEnd.getTime()-globalTimelineStart.getTime()))*100));
   const formatGlobalTimelineDate=(date:Date)=>date.toLocaleDateString("fr-CH",{day:"2-digit",month:"short"}).replace(".","");
   const globalTimelineMilestones=[
     {title:"Cadrage validé",position:22},
     {title:"Validation intermédiaire",position:52},
     {title:"Livraison technique",position:82},
   ].map(milestone=>({...milestone,date:new Date(globalTimelineStart.getTime()+(globalTimelineEnd.getTime()-globalTimelineStart.getTime())*(milestone.position/100))}));
-  return <section className="mvp-workspace global-projects-board">
-    <div className="mvp-board-head"><div><span>PROJETS EURÊKA GROUP</span><h3>Projets transversaux</h3><p>Projets réunissant des membres de plusieurs espaces de la plateforme.</p></div>{isGlobalAdmin&&<button type="button" onClick={()=>setCreateOpen(true)}>＋ Nouveau projet</button>}</div>
-    {!shared.globalProjects.length?<p className="mvp-empty">{isGlobalAdmin?"Aucun projet global. Créez un projet pour inviter des participants.":"Aucun projet ne vous a encore été proposé."}</p>:<div className="global-project-list">{shared.globalProjects.map(project=><button type="button" className="global-project-card" key={project.id} onClick={()=>{setSelectedProjectId(project.id);setProjectTab("Vue d’ensemble")}}><span className={`global-project-status ${project.status}`}>{project.status==="active"?"Projet confirmé":project.status==="archived"?"Archivé":"En attente des participants"}</span><strong>{project.title}</strong><span>{project.summary}</span><small>{project.participants.filter(person=>person.status==="accepted").length} / {project.participants.length} participants confirmés · Créé par {project.creatorName}</small><b>Ouvrir le projet　›</b></button>)}</div>}
-    {createOpen&&<div className="modal-backdrop" onMouseDown={()=>!saving&&setCreateOpen(false)}><section className="modal global-project-create-modal" onMouseDown={event=>event.stopPropagation()}><div className="modal-head"><div><span>ADMIN EURÊKA · NOUVEAU PROJET</span><h2>Créer un projet</h2></div><button type="button" aria-label="Fermer" onClick={()=>setCreateOpen(false)}>×</button></div><label>Nom du projet<input autoFocus maxLength={160} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Ex. Refonte de la plateforme"/></label><label>Résumé du projet<textarea maxLength={3000} rows={4} value={summary} onChange={event=>setSummary(event.target.value)} placeholder="Présentez brièvement l’objectif et le périmètre du projet."/></label><fieldset className="global-project-people"><legend>Participants à inviter</legend>{selectableUsers.length?selectableUsers.map(user=><label key={user.id}><input type="checkbox" checked={participantIds.includes(user.id)} onChange={event=>setParticipantIds(current=>event.target.checked?[...current,user.id]:current.filter(id=>id!==user.id))}/><span><b>{user.name}</b><small>{user.role} · {user.tradeName}</small></span></label>):<p>Aucun autre compte actif disponible.</p>}</fieldset><p className="global-project-hint">Les personnes invitées recevront une notification. Le projet sera confirmé lorsque chacun aura accepté.</p><div className="modal-actions"><button type="button" disabled={saving} onClick={()=>setCreateOpen(false)}>Annuler</button><button type="button" className="primary" disabled={saving||!title.trim()||!summary.trim()||!participantIds.length} onClick={()=>void createProject()}>{saving?"Création…":"Créer et inviter"}</button></div></section></div>}
-    {detailProject&&<div className="modal-backdrop global-project-backdrop" onMouseDown={()=>setSelectedProjectId(null)}><section className="modal global-project-detail-modal" onMouseDown={event=>event.stopPropagation()}><div className="modal-head"><div><span>PROJET EURÊKA GROUP · {detailProject.status==="active"?"CONFIRMÉ":"EN ATTENTE"}</span><h2>{detailProject.title}</h2><p>Créé par {detailProject.creatorName}</p></div><button type="button" aria-label="Fermer la fiche projet" onClick={()=>setSelectedProjectId(null)}>×</button></div><nav className="global-project-tabs" aria-label="Informations du projet">{tabs.map(tab=><button type="button" className={projectTab===tab?"active":""} key={tab} onClick={()=>setProjectTab(tab)}>{tab}</button>)}</nav><div className="global-project-detail-content">
-      {projectTab==="Vue d’ensemble"&&<><div className="global-project-summary-card"><span>ÉTAT DU PROJET</span><strong>{detailProject.status==="active"?"Tous les participants ont rejoint le projet":"En attente des validations"}</strong><p>{detailProject.participants.filter(person=>person.status==="accepted").length} sur {detailProject.participants.length} participants ont confirmé leur participation.</p></div><div className="global-project-summary-card"><span>CRÉÉ PAR</span><strong>{detailProject.creatorName}</strong><p>{new Date(detailProject.createdAt).toLocaleDateString("fr-CH")}</p></div><article className="global-project-summary-card global-project-overview-summary"><span>RÉSUMÉ DU PROJET</span><p className="global-project-long-summary">{detailProject.summary}</p></article></>}
-      {projectTab==="Cahier des charges"&&<div className="global-project-empty"><b>Cahier des charges</b><p>Le cahier des charges détaillé du projet sera disponible ici.</p></div>}
-      {projectTab==="Participants"&&<div className="global-project-participant-list">{detailProject.participants.map(person=><article key={person.userId}><i>{person.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><span><b>{person.name}{person.userId===detailProject.createdBy?" · Créateur":""}</b><small>{person.role}{person.email?` · ${person.email}`:""}</small></span><em className={person.status}>{person.status==="accepted"?"A rejoint le projet":"En attente"}</em></article>)}</div>}
-      {projectTab==="Documents"&&<div className="global-project-empty"><b>Documents du projet</b><p>Les documents partagés apparaîtront ici une fois le projet confirmé.</p></div>}
-      {projectTab==="Suivi"&&<div className="global-project-empty"><b>Suivi du projet</b><p>Le suivi commence dès que tous les participants ont rejoint le projet.</p></div>}
-      {projectTab==="Vue d’ensemble"&&<section className="project-timeline global-project-timeline" aria-label="Calendrier indicatif du projet"><div className="timeline-heading"><div><span>CALENDRIER INDICATIF · 90 JOURS</span><h3>Jalons et calendrier</h3></div><strong>{detailProject.status==="archived"?"Projet archivé · calendrier terminé":`${Math.round(globalTimelineProgress)}% du calendrier écoulé`}</strong></div><div className="timeline-scale"><div className="timeline-arrow"><i style={{width:`${globalTimelineProgress}%`}}/></div><div className={`timeline-today ${detailProject.status==="archived"?"closed":""}`} style={{left:`${globalTimelineProgress}%`}}><b>{detailProject.status==="archived"?"Archivé":"Aujourd’hui"}</b><span>{formatGlobalTimelineDate(detailProject.status==="archived"?globalTimelineEnd:globalToday)}</span></div>{globalTimelineMilestones.map((milestone,index)=><div className={`timeline-milestone ${globalTimelineProgress>=milestone.position?"passed":""}`} style={{left:`${milestone.position}%`}} key={milestone.title}><i>{index+1}</i><b>{milestone.title}</b><span>{formatGlobalTimelineDate(milestone.date)}</span></div>)}<div className="timeline-bound start"><b>Début</b><span>{formatGlobalTimelineDate(globalTimelineStart)}</span></div><div className="timeline-bound end"><b>Fin estimée</b><span>{formatGlobalTimelineDate(globalTimelineEnd)}</span></div></div></section>}
-    </div>{detailProject.status==="pending"&&detailProject.myStatus==="pending"&&<footer className="global-project-join"><p>Consultez le résumé et les participants, puis confirmez votre participation pour démarrer le projet.</p><button type="button" className="primary" onClick={()=>void shared.onAcceptGlobalProject(detailProject.id)}>Prendre part au projet</button></footer>}</section></div>}
+  const saveMilestone=async()=>{
+    setSaving(true);
+    try{if(await onCreateMilestone(project.id,milestoneTitle.trim(),milestoneDueAt||undefined)){setMilestoneOpen(false);setMilestoneTitle("");setMilestoneDueAt("")}}
+    finally{setSaving(false)}
+  };
+  const saveProjectNote=async()=>{
+    setSaving(true);
+    try{if(await onCreateNote({projectId:project.id,title:noteTitle.trim(),subject:noteSubject.trim(),description:noteDescription.trim()})){setNoteOpen(false);setNoteTitle("");setNoteSubject("");setNoteDescription("")}}
+    finally{setSaving(false)}
+  };
+  const saveTask=async()=>{
+    setSaving(true);
+    try{if(await onCreateTask(project.id,{title:taskTitle.trim(),subject:taskSubject,description:taskDescription.trim(),priority:taskPriority,dueAt:taskDueAt||undefined,assigneeUserId:taskAssigneeId||undefined})){setTaskOpen(false);setTaskTitle("");setTaskSubject("");setTaskPriority("normal");setTaskDescription("");setTaskDueAt("");setTaskAssigneeId("")}}
+    finally{setSaving(false)}
+  };
+  const saveTaskSubject=async()=>{
+    setSaving(true);
+    try{if(await onCreateTaskSubject(project.id,newSubjectName.trim())){setSubjectOpen(false);setTaskSubject(newSubjectName.trim());setNewSubjectName("")}}
+    finally{setSaving(false)}
+  };
+  const openNewTask=()=>{setTaskSubject(selectedSubject?.name||"");setTaskOpen(true)};
+  return <>
+    <div className="modal-backdrop global-project-backdrop" onMouseDown={onClose}>
+      <section className="modal global-project-detail-modal" role="dialog" aria-modal="true" aria-labelledby="global-project-title" onMouseDown={event=>event.stopPropagation()}>
+        <div className="modal-head">
+          <div><span>PROJET EURÊKA GROUP · {project.status==="active"?"CONFIRMÉ":project.status==="archived"?"ARCHIVÉ":"EN ATTENTE"}</span><h2 id="global-project-title">{project.title}</h2><p>Créé par {project.creatorName}</p></div>
+          <button type="button" aria-label="Fermer la fiche projet" onClick={onClose}>×</button>
+        </div>
+        <nav className="global-project-tabs" aria-label="Informations du projet">{tabs.map(tab=><button type="button" className={activeTab===tab?"active":""} key={tab} onClick={()=>onTabChange(tab)}>{tab}</button>)}</nav>
+        <div className="global-project-detail-content">
+          {activeTab==="Vue d’ensemble"&&<>
+            <div className="global-project-summary-card"><span>ÉTAT DU PROJET</span><strong>{project.status==="active"?"Tous les participants ont rejoint le projet":project.status==="archived"?"Projet archivé":"En attente des validations"}</strong><p>{acceptedParticipants.length} sur {project.participants.length} participants ont confirmé leur participation.</p></div>
+            <div className="global-project-summary-card"><span>CRÉÉ PAR</span><strong>{project.creatorName}</strong><p>{new Date(project.createdAt).toLocaleDateString("fr-CH")}</p></div>
+            <article className="global-project-summary-card global-project-overview-summary"><span>RÉSUMÉ DU PROJET</span><p className="global-project-long-summary">{project.summary}</p></article>
+            <button type="button" className="global-project-summary-card global-project-overview-participants" aria-expanded={participantsOpen} onClick={()=>setParticipantsOpen(true)}><span>PARTICIPANTS</span><strong>{acceptedParticipants.length} / {project.participants.length} confirmés</strong><p>Cliquer pour consulter la liste des participants.</p></button>
+            <section className="global-project-summary-card global-project-milestones">
+              <header><div><span>JALONS DU PROJET</span><strong>{project.milestones.length} jalon{project.milestones.length>1?"s":""}</strong></div>{canManage&&<button type="button" onClick={()=>setMilestoneOpen(true)}>＋ Ajouter</button>}</header>
+              {project.milestones.length?<ol>{project.milestones.map(milestone=><li key={milestone.id}><b>{milestone.title}</b><time>{formatDate(milestone.dueAt)}</time></li>)}</ol>:<p className="global-project-widget-empty">Aucun jalon défini pour le moment.</p>}
+            </section>
+            <section className="project-timeline global-project-timeline" aria-label="Calendrier indicatif du projet"><div className="timeline-heading"><div><span>CALENDRIER INDICATIF · 90 JOURS</span><h3>Jalons et calendrier</h3></div><strong>{project.status==="archived"?"Projet archivé · calendrier terminé":`${Math.round(globalTimelineProgress)}% du calendrier écoulé`}</strong></div><div className="timeline-scale"><div className="timeline-arrow"><i style={{width:`${globalTimelineProgress}%`}}/></div><div className={`timeline-today ${project.status==="archived"?"closed":""}`} style={{left:`${globalTimelineProgress}%`}}><b>{project.status==="archived"?"Archivé":"Aujourd’hui"}</b><span>{formatGlobalTimelineDate(project.status==="archived"?globalTimelineEnd:globalToday)}</span></div>{globalTimelineMilestones.map((milestone,index)=><div className={`timeline-milestone ${globalTimelineProgress>=milestone.position?"passed":""}`} style={{left:`${milestone.position}%`}} key={milestone.title}><i>{index+1}</i><b>{milestone.title}</b><span>{formatGlobalTimelineDate(milestone.date)}</span></div>)}<div className="timeline-bound start"><b>Début</b><span>{formatGlobalTimelineDate(globalTimelineStart)}</span></div><div className="timeline-bound end"><b>Fin estimée</b><span>{formatGlobalTimelineDate(globalTimelineEnd)}</span></div></div></section>
+          </>}
+          {activeTab==="Cahier des charges"&&<div className="global-project-empty"><b>Cahier des charges</b><p>Le cahier des charges détaillé du projet sera disponible ici.</p></div>}
+          {activeTab==="Tâches"&&<section className="global-project-tasks-panel">
+            <header><div><span>ORGANISATION DU PROJET</span><h3>Tâches</h3></div>{canManage&&<div className="global-project-task-actions"><button type="button" onClick={()=>setSubjectOpen(true)}>＋ Ajouter un sujet</button></div>}</header>
+            {selectedSubject?<section className="global-project-task-subject-detail">
+              <header><button type="button" className="global-project-task-back" onClick={()=>setSelectedSubjectName(null)}>← Tous les sujets</button><div><h4>{selectedSubject.name}</h4><small>{selectedSubjectTasks.length} tâche{selectedSubjectTasks.length===1?"":"s"}</small></div>{canManage&&<button type="button" className="global-project-task-add" onClick={openNewTask}>＋ Ajouter une tâche</button>}</header>
+              {selectedSubjectTasks.length?<div className="global-project-task-tiles">{selectedSubjectTasks.map(task=><article className="global-project-task-tile" key={task.id}>
+                  <button type="button" className="global-project-task-open" onClick={()=>setSelectedTaskId(task.id)}>
+                    <span className="global-project-task-tile-heading"><i className={`priority ${task.priority||"normal"}`}>{globalTaskPriorityLabels[task.priority||"normal"]}</i><i className={task.status}>{globalTaskStatusLabels[task.status]}</i></span>
+                    <strong>{task.title}</strong>
+                    {task.description&&<p>{task.description}</p>}
+                    <small className="global-project-task-assignee">{task.assigneeUserId?`Attribuée à ${task.assigneeName||"un participant"}`:"Non attribuée"}</small>
+                    <small>{formatDate(task.dueAt)}</small>
+                    {task.documents.length>0&&<small>▤ {task.documents.length} document{task.documents.length===1?"":"s"} · {task.activity.length} activité{task.activity.length===1?"":"s"}</small>}
+                    <span className="global-project-task-tile-open">Voir le détail　›</span>
+                  </button>
+                  {canManage&&!task.assigneeUserId&&task.status!=="done"&&<button type="button" className="global-project-task-claim" disabled={saving} onClick={()=>void onClaimTask(project.id,task.id)}>＋ Prendre cette tâche</button>}
+                </article>)}</div>:<div className="global-project-empty"><b>Aucune tâche dans ce sujet</b><p>Ajoutez une tâche pour commencer à organiser ce sujet.</p>{canManage&&<button type="button" onClick={openNewTask}>＋ Ajouter une tâche</button>}</div>}
+            </section>:taskSubjects.length?<div className="global-project-task-subject-grid">{taskSubjects.map(subject=>{
+              const subjectTasks=project.tasks.filter(task=>getTaskSubject(task).toLocaleLowerCase("fr")===subject.name.toLocaleLowerCase("fr"));
+              return <button type="button" className="global-project-task-subject-card" key={subject.id} aria-label={`Ouvrir le sujet ${subject.name}, ${subjectTasks.length} tâche${subjectTasks.length===1?"":"s"}`} onClick={()=>setSelectedSubjectName(subject.name)}>
+                <span>SUJET DU PROJET</span><strong>{subject.name}</strong><small>{subjectTasks.length} tâche{subjectTasks.length===1?"":"s"}</small><em>Voir les tâches　›</em>
+              </button>;
+            })}</div>:<div className="global-project-empty"><b>Aucun sujet</b><p>Ajoutez un sujet pour structurer les tâches du projet.</p>{canManage&&<button type="button" onClick={()=>setSubjectOpen(true)}>＋ Ajouter un sujet</button>}</div>}
+          </section>}
+          {activeTab==="Bloc Note"&&<section className="global-project-notes-panel">
+            <header><div><span>IDÉES ET POINTS À ABORDER</span><h3>Bloc Note</h3></div>{canManage&&<button type="button" onClick={()=>setNoteOpen(true)}>＋ Ajouter une note</button>}</header>
+            {project.notes?.length?<div className="global-project-note-grid">{project.notes.map(note=><GlobalNoteCard key={note.id} note={note} projectLabel={project.title}/>)}</div>:<div className="global-project-empty"><b>Aucune note pour le moment</b><p>Ajoutez une idée ou un point à discuter lors de la prochaine séance.</p>{canManage&&<button type="button" onClick={()=>setNoteOpen(true)}>＋ Ajouter une note</button>}</div>}
+          </section>}
+          {activeTab==="Documents"&&<section className="global-project-task-documents"><header><span>FICHIERS DES TÂCHES</span><h3>Documents du projet</h3></header>{project.tasks.some(task=>task.documents.length)?project.tasks.flatMap(task=>task.documents.map(document=><article key={document.id}><span>▤</span><div><b>{document.originalName}</b><small>{task.title} · ajouté par {document.uploadedBy||"un participant"} · {formatDate(document.createdAt.slice(0,10))}</small></div><a href={document.downloadUrl}>Télécharger</a></article>)):<p className="global-project-empty">Les documents téléversés dans les tâches apparaîtront ici et dans « Mes tâches ».</p>}</section>}
+          {activeTab==="Suivi"&&<div className="global-project-empty"><b>Suivi du projet</b><p>Le suivi commence dès que tous les participants ont rejoint le projet.</p></div>}
+        </div>
+        {project.status==="pending"&&project.myStatus==="pending"&&<footer className="global-project-join"><p>Consultez le résumé et les participants, puis confirmez votre participation pour démarrer le projet.</p><button type="button" className="primary" onClick={()=>void onAccept()}>Prendre part au projet</button></footer>}
+      </section>
+    </div>
+    {participantsOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>setParticipantsOpen(false)}><section className="global-project-submodal" role="dialog" aria-modal="true" aria-labelledby="global-project-participants-title" onMouseDown={event=>event.stopPropagation()}><header><div><span>ÉQUIPE DU PROJET</span><h3 id="global-project-participants-title">Participants</h3></div><button type="button" aria-label="Fermer les participants" onClick={()=>setParticipantsOpen(false)}>×</button></header><div className="global-project-participant-list">{project.participants.map(person=><article key={person.userId}><i>{person.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</i><span><b>{person.name}{person.userId===project.createdBy?" · Créateur":""}</b><small>{person.role}{person.email?` · ${person.email}`:""}</small></span><em className={person.status}>{person.status==="accepted"?"A rejoint le projet":"En attente"}</em></article>)}</div></section></div>}
+    {milestoneOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>!saving&&setMilestoneOpen(false)}><form className="global-project-submodal global-project-item-form" aria-labelledby="global-project-milestone-title" onSubmit={event=>{event.preventDefault();void saveMilestone()}} onMouseDown={event=>event.stopPropagation()}><header><div><span>ORGANISATION DU PROJET</span><h3 id="global-project-milestone-title">Ajouter un jalon</h3></div><button type="button" aria-label="Fermer" onClick={()=>setMilestoneOpen(false)}>×</button></header><label>Nom du jalon<input autoFocus required maxLength={160} value={milestoneTitle} onChange={event=>setMilestoneTitle(event.target.value)} placeholder="Ex. Validation du cahier des charges"/></label><label>Échéance<input type="date" value={milestoneDueAt} onChange={event=>setMilestoneDueAt(event.target.value)}/></label><footer><button type="button" disabled={saving} onClick={()=>setMilestoneOpen(false)}>Annuler</button><button type="submit" className="primary" disabled={saving||!milestoneTitle.trim()}>{saving?"Ajout…":"Ajouter le jalon"}</button></footer></form></div>}
+    {noteOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>!saving&&setNoteOpen(false)}><form className="global-project-submodal global-project-item-form" aria-labelledby="global-project-note-title" onSubmit={event=>{event.preventDefault();void saveProjectNote()}} onMouseDown={event=>event.stopPropagation()}><header><div><span>BLOC NOTE DU PROJET</span><h3 id="global-project-note-title">Ajouter une note</h3></div><button type="button" aria-label="Fermer" onClick={()=>setNoteOpen(false)}>×</button></header><label>Titre<input autoFocus required maxLength={160} value={noteTitle} onChange={event=>setNoteTitle(event.target.value)} placeholder="Ex. Idée pour la prochaine séance"/></label><label>Sujet<input required maxLength={120} value={noteSubject} onChange={event=>setNoteSubject(event.target.value)} placeholder="Ex. Parcours utilisateur"/></label><label>Description<textarea required maxLength={8000} rows={6} value={noteDescription} onChange={event=>setNoteDescription(event.target.value)} placeholder="Décrivez librement l’idée ou le point à discuter."/></label><footer><button type="button" disabled={saving} onClick={()=>setNoteOpen(false)}>Annuler</button><button type="submit" className="primary" disabled={saving||!noteTitle.trim()||!noteSubject.trim()||!noteDescription.trim()}>{saving?"Publication…":"Publier la note"}</button></footer></form></div>}
+    {subjectOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>!saving&&setSubjectOpen(false)}><form className="global-project-submodal global-project-item-form" aria-labelledby="global-project-subject-title" onSubmit={event=>{event.preventDefault();void saveTaskSubject()}} onMouseDown={event=>event.stopPropagation()}><header><div><span>ORGANISATION DU PROJET</span><h3 id="global-project-subject-title">Ajouter un sujet</h3></div><button type="button" aria-label="Fermer" onClick={()=>setSubjectOpen(false)}>×</button></header><label>Nom du sujet<input autoFocus required maxLength={120} value={newSubjectName} onChange={event=>setNewSubjectName(event.target.value)} placeholder="Ex. Marketing"/></label><footer><button type="button" disabled={saving} onClick={()=>setSubjectOpen(false)}>Annuler</button><button type="submit" className="primary" disabled={saving||!newSubjectName.trim()}>{saving?"Ajout…":"Ajouter le sujet"}</button></footer></form></div>}
+    {taskOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>!saving&&setTaskOpen(false)}><form className="global-project-submodal global-project-item-form" aria-labelledby="global-project-task-title" onSubmit={event=>{event.preventDefault();void saveTask()}} onMouseDown={event=>event.stopPropagation()}><header><div><span>ORGANISATION DU PROJET</span><h3 id="global-project-task-title">Ajouter une tâche</h3></div><button type="button" aria-label="Fermer" onClick={()=>setTaskOpen(false)}>×</button></header><label>Titre<input autoFocus required maxLength={160} value={taskTitle} onChange={event=>setTaskTitle(event.target.value)} placeholder="Ex. Préparer les premières maquettes"/></label><label>Sujet<select required value={taskSubject} onChange={event=>setTaskSubject(event.target.value)}><option value="">Choisir un sujet</option>{taskSubjects.map(subject=><option key={subject.id} value={subject.name}>{subject.name}</option>)}</select><small><button type="button" onClick={()=>{setTaskOpen(false);setSubjectOpen(true)}}>＋ Créer un nouveau sujet</button></small></label><label>Description<textarea maxLength={2000} rows={3} value={taskDescription} onChange={event=>setTaskDescription(event.target.value)} placeholder="Précisez le résultat attendu."/></label><label>Priorité<select value={taskPriority} onChange={event=>setTaskPriority(event.target.value as GlobalProjectTaskPriority)}>{Object.entries(globalTaskPriorityLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Échéance<input type="date" value={taskDueAt} onChange={event=>setTaskDueAt(event.target.value)}/></label><label>Responsable<select value={taskAssigneeId} onChange={event=>setTaskAssigneeId(event.target.value)}><option value="">Libre — un participant pourra la prendre</option>{acceptedParticipants.map(person=><option key={person.userId} value={person.userId}>{person.name}</option>)}</select></label><footer><button type="button" disabled={saving} onClick={()=>setTaskOpen(false)}>Annuler</button><button type="submit" className="primary" disabled={saving||!taskTitle.trim()||!taskSubject}>{saving?"Ajout…":"Ajouter la tâche"}</button></footer></form></div>}
+    {selectedTask&&<GlobalProjectTaskDetail project={project} task={selectedTask} currentUserId={currentUserId} canManage={canManage} onClose={()=>setSelectedTaskId(null)} onClaimTask={onClaimTask} onUpdateTask={onUpdateTask} onAddTaskComment={onAddTaskComment} onUploadTaskDocument={onUploadTaskDocument}/>}
+  </>;
+}
+
+function GlobalProjectTaskDetail({project,task,currentUserId,canManage,onClose,onClaimTask,onUpdateTask,onAddTaskComment,onUploadTaskDocument}:{project:GlobalProject;task:GlobalProjectTask;currentUserId:string;canManage:boolean;onClose:()=>void;onClaimTask:MvpSharedProps["onClaimGlobalTask"];onUpdateTask:MvpSharedProps["onUpdateGlobalTask"];onAddTaskComment:MvpSharedProps["onAddGlobalTaskComment"];onUploadTaskDocument:MvpSharedProps["onUploadGlobalTaskDocument"]}){
+  const [comment,setComment]=useState("");
+  const [savingComment,setSavingComment]=useState(false);
+  const [savingDocument,setSavingDocument]=useState(false);
+  const submitComment=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();
+    if(!comment.trim())return;
+    setSavingComment(true);
+    try{if(await onAddTaskComment(project.id,task.id,comment.trim()))setComment("")}
+    finally{setSavingComment(false)}
+  };
+  const uploadDocument=async(event:React.ChangeEvent<HTMLInputElement>)=>{
+    const file=event.currentTarget.files?.[0];
+    event.currentTarget.value="";
+    if(!file)return;
+    setSavingDocument(true);
+    try{await onUploadTaskDocument(project.id,task.id,file)}
+    finally{setSavingDocument(false)}
+  };
+  const canClaim=canManage&&project.status!=="archived"&&!task.assigneeUserId&&task.status!=="done";
+  return <div className="global-project-submodal-backdrop" onMouseDown={onClose}><section className="mission-detail-popup global-project-task-detail-popup" role="dialog" aria-modal="true" aria-labelledby={`global-project-task-${task.id}`} onMouseDown={event=>event.stopPropagation()}>
+    <button type="button" className="project-close" aria-label="Fermer le détail de la tâche" onClick={onClose}>×</button>
+    <span className="mission-detail-label">{task.subject.toLocaleUpperCase("fr")} · {project.title}</span><h2 id={`global-project-task-${task.id}`}>{task.title}</h2>
+    <div className="mission-detail-data"><article><small>RESPONSABLE</small><strong>{task.assigneeUserId===currentUserId?"Vous":task.assigneeName||"Libre · à prendre"}</strong></article><article><small>ÉCHÉANCE</small><strong>{task.dueAt?new Date(`${task.dueAt}T00:00:00`).toLocaleDateString("fr-CH"):"Sans échéance"}</strong></article><article><small>PRIORITÉ</small><strong className={`global-project-priority ${task.priority}`}>{globalTaskPriorityLabels[task.priority]}</strong></article></div>
+    {canClaim&&<button type="button" className="global-project-task-claim global-project-task-claim-detail" onClick={()=>void onClaimTask(project.id,task.id)}>＋ Prendre cette tâche</button>}
+    <article className="global-project-task-detail-description"><span>DÉTAILS</span><p>{task.description||"Aucune description renseignée."}</p></article>
+    <div className="global-project-task-detail-controls"><label>Statut<select aria-label={`Statut de la tâche ${task.title}`} value={task.status} disabled={!canManage||project.status==="archived"} onChange={event=>void onUpdateTask(project.id,task.id,{status:event.target.value as GlobalProjectTask["status"]})}>{Object.entries(globalTaskStatusLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Priorité<select aria-label={`Priorité de la tâche ${task.title}`} value={task.priority} disabled={!canManage||project.status==="archived"} onChange={event=>void onUpdateTask(project.id,task.id,{priority:event.target.value as GlobalProjectTaskPriority})}>{Object.entries(globalTaskPriorityLabels).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label></div>
+    <section className="global-project-task-shared-content"><header><div><span>DOCUMENTS PARTAGÉS AVEC LE PROJET</span><h3>Documents</h3></div><label className="global-project-task-upload">{savingDocument?"Envoi…":"＋ Ajouter un document"}<input type="file" accept=".doc,.docx,.xls,.xlsx,.pdf,.one,.onepkg,.step,.stp,.ipt,.iam,.dwg,.dxf,.zip" disabled={savingDocument||project.status==="archived"} onChange={event=>void uploadDocument(event)}/></label></header>{task.documents.length?<ul>{task.documents.map(document=><li key={document.id}><span>▤</span><a href={document.downloadUrl}>{document.originalName}</a><small>{document.uploadedBy||"Participant"} · {new Date(document.createdAt).toLocaleDateString("fr-CH")}</small></li>)}</ul>:<p>Aucun document joint à cette tâche.</p>}</section>
+    <section className="global-project-task-shared-content"><header><div><span>FIL DU PROJET</span><h3>Commentaires et historique</h3></div></header><form className="global-project-task-comment-form" onSubmit={event=>void submitComment(event)}><textarea maxLength={4000} rows={3} value={comment} onChange={event=>setComment(event.target.value)} placeholder="Ajouter une note ou un commentaire…" disabled={project.status==="archived"}/><button type="submit" disabled={savingComment||!comment.trim()||project.status==="archived"}>{savingComment?"Envoi…":"Publier"}</button></form>{task.activity.length?<ol>{task.activity.map(event=><li key={event.id}><b>{event.actorName}</b><p>{event.summary}</p><time>{new Date(event.createdAt).toLocaleString("fr-CH")}</time></li>)}</ol>:<p>Aucune activité pour le moment.</p>}</section>
+  </section></div>;
+}
+
+function MyGlobalTasksBoard({shared}:{shared:MvpSharedProps}){
+  const [selectedTaskId,setSelectedTaskId]=useState<string|null>(null);
+  const tasks=shared.globalProjects.flatMap(project=>project.tasks.filter(task=>task.assigneeUserId===shared.currentUser.id).map(task=>({project,task})));
+  const selected=tasks.find(item=>item.task.id===selectedTaskId)||null;
+  const canManage=(project:GlobalProject)=>project.status!=="archived"&&(shared.currentUser.role==="Admin Eurêka"||project.createdBy===shared.currentUser.id||project.myStatus==="accepted");
+  return <section className="mvp-workspace global-projects-board my-global-project-tasks"><div className="mvp-board-head"><div><span>VOTRE ESPACE DE TRAVAIL</span><h3>Mes tâches</h3><p>Les tâches qui vous sont attribuées depuis vos projets.</p></div><strong>{tasks.length} tâche{tasks.length===1?"":"s"}</strong></div>
+    {tasks.length?<div className="global-project-my-task-grid">{tasks.map(({project,task})=><button type="button" className="global-project-my-task-card" key={`${project.id}-${task.id}`} onClick={()=>setSelectedTaskId(task.id)}><span><em>{task.subject}</em><i className={`priority ${task.priority}`}>{globalTaskPriorityLabels[task.priority]}</i></span><strong>{task.title}</strong><small>{project.title}</small><span className="global-project-my-task-footer"><i className={task.status}>{globalTaskStatusLabels[task.status]}</i><time>{task.dueAt?new Date(`${task.dueAt}T00:00:00`).toLocaleDateString("fr-CH"):"Sans échéance"}</time></span></button>)}</div>:<div className="global-project-empty"><b>Aucune tâche attribuée</b><p>Les tâches qui vous sont attribuées apparaîtront ici. Vous pouvez aussi prendre une tâche libre dans l’onglet « Tâches » d’un projet.</p></div>}
+    {selected&&<GlobalProjectTaskDetail project={selected.project} task={selected.task} currentUserId={shared.currentUser.id} canManage={canManage(selected.project)} onClose={()=>setSelectedTaskId(null)} onClaimTask={shared.onClaimGlobalTask} onUpdateTask={shared.onUpdateGlobalTask} onAddTaskComment={shared.onAddGlobalTaskComment} onUploadTaskDocument={shared.onUploadGlobalTaskDocument}/>}
+  </section>;
+}
+
+function MyGlobalNotebookBoard({shared}:{shared:MvpSharedProps}){
+  const [noteOpen,setNoteOpen]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [projectId,setProjectId]=useState("");
+  const [title,setTitle]=useState("");
+  const [subject,setSubject]=useState("");
+  const [description,setDescription]=useState("");
+  const notes=shared.globalNotes.filter(note=>note.authorUserId===shared.currentUser.id);
+  const projects=shared.globalProjects.filter(project=>project.status!=="archived"&&(shared.currentUser.role==="Admin Eurêka"||project.createdBy===shared.currentUser.id||project.myStatus==="accepted"));
+  const saveNote=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();
+    setSaving(true);
+    try{if(await shared.onCreateGlobalNote({projectId:projectId||undefined,title:title.trim(),subject:subject.trim(),description:description.trim()})){setNoteOpen(false);setProjectId("");setTitle("");setSubject("");setDescription("")}}
+    finally{setSaving(false)}
+  };
+  return <section className="mvp-workspace global-projects-board my-global-notebook">
+    <div className="mvp-board-head"><div><span>VOTRE ESPACE DE TRAVAIL</span><h3>Mon bloc note</h3><p>Vos idées et points à discuter, liés ou non à un projet.</p></div><strong>{notes.length} note{notes.length===1?"":"s"}</strong></div>
+    <div className="global-project-notes-toolbar"><span>Retrouvez ici les notes que vous avez ajoutées dans vos projets ou à titre personnel.</span><button type="button" onClick={()=>setNoteOpen(true)}>＋ Ajouter une note</button></div>
+    {notes.length?<div className="global-project-note-grid">{notes.map(note=><GlobalNoteCard key={note.id} note={note}/>)}</div>:<div className="global-project-empty"><b>Aucune note pour le moment</b><p>Ajoutez une idée à conserver pour votre prochaine séance.</p><button type="button" onClick={()=>setNoteOpen(true)}>＋ Ajouter une note</button></div>}
+    {noteOpen&&<div className="global-project-submodal-backdrop" onMouseDown={()=>!saving&&setNoteOpen(false)}><form className="global-project-submodal global-project-item-form" aria-labelledby="personal-note-title" onSubmit={event=>void saveNote(event)} onMouseDown={event=>event.stopPropagation()}>
+      <header><div><span>MON BLOC NOTE</span><h3 id="personal-note-title">Ajouter une note</h3></div><button type="button" aria-label="Fermer" onClick={()=>setNoteOpen(false)}>×</button></header>
+      <label>Projet (facultatif)<select value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">Aucun projet — note personnelle</option>{projects.map(project=><option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+      <label>Titre<input autoFocus required maxLength={160} value={title} onChange={event=>setTitle(event.target.value)} placeholder="Ex. Idée pour la prochaine séance"/></label>
+      <label>Sujet<input required maxLength={120} value={subject} onChange={event=>setSubject(event.target.value)} placeholder="Ex. Parcours utilisateur"/></label>
+      <label>Description<textarea required maxLength={8000} rows={6} value={description} onChange={event=>setDescription(event.target.value)} placeholder="Décrivez librement l’idée ou le point à discuter."/></label>
+      <footer><button type="button" disabled={saving} onClick={()=>setNoteOpen(false)}>Annuler</button><button type="submit" className="primary" disabled={saving||!title.trim()||!subject.trim()||!description.trim()}>{saving?"Publication…":"Publier la note"}</button></footer>
+    </form></div>}
   </section>;
 }
 
@@ -5361,6 +5612,8 @@ export default function Home() {
   const [milestones,setMilestones]=useState<ProjectMilestone[]>([]);
   const [active, setActive] = useState("Accueil");
   const [globalProjects,setGlobalProjects]=useState<GlobalProject[]>([]);
+  const [globalNotes,setGlobalNotes]=useState<GlobalProjectNote[]>([]);
+  const [localDemoGlobalNotes,setLocalDemoGlobalNotes]=useState<GlobalProjectNote[]>([]);
   const [localDemoGlobalProjects,setLocalDemoGlobalProjects]=useState<GlobalProject[]>([{
     id:localDemoGlobalProjectId,
     title:"Lancement de la nouvelle plateforme Eurêka",
@@ -5376,6 +5629,10 @@ export default function Home() {
       {userId:localDemoMandataireId,name:"Sophie Laurent",role:"Mandataire",status:"pending"},
       {userId:localDemoFreelancerId,name:"Camille Dubois",role:"Freelance",status:"pending"},
     ],
+    milestones:[],
+    taskSubjects:[],
+    notes:[],
+    tasks:[],
   }]);
   const [requestedGlobalProjectId,setRequestedGlobalProjectId]=useState<string|null>(null);
   const [metier, setMetier] = useState("R&D Horlogerie");
@@ -5467,7 +5724,12 @@ export default function Home() {
       setIdentity({name:data.currentUser.name,email:data.currentUser.email});
       const mappedUsers:PlatformUser[]=(data.users||[]).map((user:any)=>({id:user.id,membershipId:user.membership_id||undefined,email:user.email,eurekaEmail:user.eureka_email||undefined,name:user.display_name,role:roleLabels[user.role]||"Freelance",tradeId:user.trade_id,tradeName:user.trade_name,status:user.status,projectClass:user.project_class||undefined,credits:user.credits??undefined,reservedCredits:user.reserved_credits??undefined,note:user.rating??undefined}));
       const mappedTrades:PlatformTrade[]=(data.trades||[]).map((trade:any)=>({id:trade.id,name:trade.name,adminName:mappedUsers.find(user=>user.tradeId===trade.id&&user.role==="Admin métier")?.name||"Admin Métier à inviter",adhesionDocument:{id:`adh-${trade.id}`,name:`Document d’adhésion — ${trade.name}`,description:"Document fourni par l’Admin Métier",fileName:"Document_adhesion.docx",url:"#"}}));
-      setUsers(mappedUsers);setTrades(mappedTrades);setNotifications(data.notifications||[]);setInvoices((data.invoices||[]).map((invoice:any)=>({id:invoice.id,reference:invoice.reference,projectTitle:invoice.project_title,amount:Number(invoice.amount_cents)/100,status:invoice.status,issueDate:invoice.issue_date,dueDate:invoice.due_date})));setTradeSettings((data.tradeSettings||[]).map((setting:any)=>{let parsed={value:setting.value_json};try{parsed=JSON.parse(setting.value_json)}catch{}return{id:setting.id,key:setting.setting_key,value:parsed.value||setting.value_json,status:setting.status}}));setMilestones((data.milestones||[]).map((milestone:any)=>({id:milestone.id,projectId:milestone.project_id,title:milestone.title,dueAt:milestone.due_at,status:milestone.status})));setGlobalProjects((data.globalProjects||[]).map((project:any)=>({id:project.id,title:project.title,summary:project.summary,status:project.status,createdBy:project.created_by,creatorName:project.creator_name,createdAt:project.created_at,myStatus:project.my_status,participants:(project.participants||[]).map((participant:any)=>({userId:participant.user_id,name:participant.display_name,email:participant.email,role:participant.role,status:participant.status,invitedAt:participant.invited_at,acceptedAt:participant.accepted_at}))})));
+      setUsers(mappedUsers);setTrades(mappedTrades);setNotifications(data.notifications||[]);setInvoices((data.invoices||[]).map((invoice:any)=>({id:invoice.id,reference:invoice.reference,projectTitle:invoice.project_title,amount:Number(invoice.amount_cents)/100,status:invoice.status,issueDate:invoice.issue_date,dueDate:invoice.due_date})));setTradeSettings((data.tradeSettings||[]).map((setting:any)=>{let parsed={value:setting.value_json};try{parsed=JSON.parse(setting.value_json)}catch{}return{id:setting.id,key:setting.setting_key,value:parsed.value||setting.value_json,status:setting.status}}));setMilestones((data.milestones||[]).map((milestone:any)=>({id:milestone.id,projectId:milestone.project_id,title:milestone.title,dueAt:milestone.due_at,status:milestone.status})));setGlobalProjects((data.globalProjects||[]).map((project:any)=>({id:project.id,title:project.title,summary:project.summary,status:project.status,createdBy:project.created_by,creatorName:project.creator_name,createdAt:project.created_at,myStatus:project.my_status,participants:(project.participants||[]).map((participant:any)=>({userId:participant.user_id,name:participant.display_name,email:participant.email,role:participant.role,status:participant.status,invitedAt:participant.invited_at,acceptedAt:participant.accepted_at})),milestones:(project.milestones||[]).map((milestone:any)=>({id:milestone.id,title:milestone.title,dueAt:milestone.due_at||undefined})),taskSubjects:(project.task_subjects||[]).map((subject:any)=>({id:subject.id,name:subject.name})),tasks:(project.tasks||[]).map((task:any)=>({id:task.id,title:task.title,subject:task.subject||"Général",description:task.description||"",dueAt:task.due_at||undefined,assigneeUserId:task.assignee_user_id||undefined,assigneeName:task.assignee_name||undefined,status:task.status,priority:task.priority||"normal",documents:(task.documents||[]).map((document:any)=>({id:document.id,originalName:document.original_name,mimeType:document.mime_type,sizeBytes:Number(document.size_bytes),uploadedBy:document.uploaded_by_name||undefined,createdAt:document.created_at,downloadUrl:document.download_url})),activity:(task.activity||[]).map((event:any)=>({id:event.id,eventType:event.event_type,summary:event.summary,actorName:event.actor_name,createdAt:event.created_at}))}))})));
+      setGlobalProjects(projects=>projects.map(project=>{
+        const source=(data.globalProjects||[]).find((candidate:any)=>candidate.id===project.id);
+        return {...project,notes:(source?.notes||[]).map((note:any)=>({id:note.id,projectId:project.id,projectTitle:project.title,title:note.title,subject:note.subject,description:note.description,authorUserId:note.author_user_id,authorName:note.author_name||"Utilisateur retiré",createdAt:note.created_at}))};
+      }));
+      setGlobalNotes((data.globalNotes||[]).map((note:any)=>({id:note.id,projectId:note.project_id||undefined,projectTitle:note.project_title||undefined,title:note.title,subject:note.subject,description:note.description,authorUserId:note.author_user_id,authorName:note.author_name||"Utilisateur retiré",createdAt:note.created_at})));
       const currentMembership=data.memberships?.[0];
       const mappedCurrent:PlatformUser|undefined=data.currentUser.globalAdmin?{id:data.currentUser.id,email:data.currentUser.email,eurekaEmail:data.currentUser.eurekaEmail,name:data.currentUser.name,role:"Admin Eurêka",tradeId:"all-trades",tradeName:"Tous les métiers"}:currentMembership?{id:data.currentUser.id,membershipId:currentMembership.id,email:data.currentUser.email,eurekaEmail:data.currentUser.eurekaEmail,name:data.currentUser.name,role:roleLabels[currentMembership.role]||"Freelance",tradeId:currentMembership.trade_id,tradeName:mappedTrades.find(trade=>trade.id===currentMembership.trade_id)?.name||"Métier",projectClass:currentMembership.project_class||undefined,credits:currentMembership.credits,note:currentMembership.rating}:undefined;
       setAdminInvitations((data.adminInvitations||[]).map((invitation:any)=>({id:invitation.id,name:invitation.display_name,email:invitation.email||undefined,role:invitation.role==="admin_eureka"?"Admin Eurêka":"Admin métier",tradeId:invitation.trade_id||undefined,tradeName:invitation.role==="admin_eureka"?"Tous les métiers":invitation.trade_name||"Métier obligatoire",status:invitation.status,accountUserId:invitation.account_user_id||undefined})));
@@ -5497,11 +5759,31 @@ export default function Home() {
           {userId:currentUser!.id,name:currentUser!.name,role:"Admin Eurêka",status:"accepted"},
           ...selectedUsers.map(user=>({userId:user.id,name:user.name,email:user.email,role:user.role,status:"pending" as const})),
         ],
+        milestones:[],
+        taskSubjects:[],
+        notes:[],
+        tasks:[],
       },...projects]);
       setActionSuccess(true);setActionMessage("Simulation locale : projet créé et invitations simulées, sans écriture dans la base.");
       return true;
     }
     return Boolean(await runAction("/api/v1/global-projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,summary,participantIds})},"Projet créé et invitations envoyées."));
+  };
+  const createGlobalNote:MvpSharedProps["onCreateGlobalNote"]=async(note)=>{
+    if(canUseLocalEditor&&(!note.projectId||note.projectId.startsWith("SIM-GLOBAL-"))){
+      const authorUserId=localPreviewUserId||currentUser!.id;
+      const authorName=authorUserId===currentUser!.id?currentUser!.name:simulatedGlobalUsers.find(user=>user.id===authorUserId)?.name||"Participant";
+      const project=note.projectId?localDemoGlobalProjects.find(item=>item.id===note.projectId):undefined;
+      if(note.projectId&&!project)return false;
+      const createdAt=new Date().toISOString();
+      const createdNote:GlobalProjectNote={id:`SIM-GNOTE-${Date.now()}`,projectId:note.projectId,projectTitle:project?.title,title:note.title,subject:note.subject,description:note.description,authorUserId,authorName,createdAt};
+      if(project)setLocalDemoGlobalProjects(projects=>projects.map(item=>item.id===project.id?{...item,notes:[...(item.notes||[]),createdNote]}:item));
+      else setLocalDemoGlobalNotes(notes=>[createdNote,...notes]);
+      setActionSuccess(true);setActionMessage("Simulation locale : note ajoutée sans écriture dans la base.");return true;
+    }
+    const path=note.projectId?`/api/v1/global-projects/${note.projectId}/notes`:"/api/v1/global-notes";
+    const {projectId,...payload}=note;
+    return Boolean(await runAction(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)},projectId?"Note ajoutée au projet et à Mon bloc note.":"Note personnelle ajoutée à Mon bloc note."));
   };
   const acceptGlobalProject:MvpSharedProps["onAcceptGlobalProject"]=async(projectId)=>{
     if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")&&localPreviewUserId){
@@ -5516,6 +5798,64 @@ export default function Home() {
       return accepted;
     }
     return Boolean(await runAction(`/api/v1/global-projects/${projectId}/accept`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"},"Votre participation a été confirmée."));
+  };
+  const createGlobalMilestone:MvpSharedProps["onCreateGlobalMilestone"]=async(projectId,title,dueAt)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id===projectId?{...project,milestones:[...project.milestones,{id:`SIM-GMILESTONE-${Date.now()}`,title,dueAt}]}:project));
+      setActionSuccess(true);setActionMessage("Simulation locale : jalon ajouté sans écriture dans la base.");return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/milestones`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({title,dueAt})},"Jalon ajouté au projet."));
+  };
+  const createGlobalTask:MvpSharedProps["onCreateGlobalTask"]=async(projectId,task)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      const simulatedProject=localDemoGlobalProjects.find(project=>project.id===projectId);
+      const assignee=simulatedProject?.participants.find(person=>person.userId===task.assigneeUserId||(person.userId===localDemoGlobalAdminId&&task.assigneeUserId===currentUser!.id));
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id===projectId?{...project,tasks:[...project.tasks,{id:`SIM-GTASK-${Date.now()}`,...task,assigneeName:assignee?.name,status:"todo",documents:[],activity:[{id:`SIM-GEVENT-${Date.now()}`,eventType:"created",summary:`Tâche créée : ${task.title}`,actorName:currentUser!.name,createdAt:new Date().toISOString()}]}]}:project));
+      setActionSuccess(true);setActionMessage("Simulation locale : tâche ajoutée sans écriture dans la base.");return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/tasks`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(task)},"Tâche ajoutée au projet."));
+  };
+  const createGlobalTaskSubject:MvpSharedProps["onCreateGlobalTaskSubject"]=async(projectId,name)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id!==projectId?project:project.taskSubjects.some(subject=>subject.name.toLocaleLowerCase("fr")===name.toLocaleLowerCase("fr"))?project:{...project,taskSubjects:[...project.taskSubjects,{id:`SIM-GSUBJECT-${Date.now()}`,name}]}));
+      setActionSuccess(true);setActionMessage("Simulation locale : sujet ajouté sans écriture dans la base.");return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/task-subjects`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name})},"Sujet ajouté au projet."));
+  };
+  const claimGlobalTask:MvpSharedProps["onClaimGlobalTask"]=async(projectId,taskId)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      const assigneeId=localPreviewUserId||currentUser!.id;
+      const assigneeName=assigneeId===currentUser!.id?currentUser!.name:simulatedGlobalUsers.find(user=>user.id===assigneeId)?.name||"Participant";
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id!==projectId?project:{...project,tasks:project.tasks.map(task=>task.id===taskId&&!task.assigneeUserId?{...task,assigneeUserId:assigneeId,assigneeName,activity:[...task.activity,{id:`SIM-GEVENT-${Date.now()}`,eventType:"claimed",summary:`${assigneeName} a pris cette tâche.`,actorName:assigneeName,createdAt:new Date().toISOString()}]}:task)}));
+      return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/tasks/${taskId}/claim`,{method:"POST",headers:{"content-type":"application/json"},body:"{}"},"Tâche attribuée à votre compte."));
+  };
+  const updateGlobalTask:MvpSharedProps["onUpdateGlobalTask"]=async(projectId,taskId,update)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id!==projectId?project:{...project,tasks:project.tasks.map(task=>{
+        if(task.id!==taskId)return task;
+        const activity=Object.entries(update).map(([field,value])=>({id:`SIM-GEVENT-${Date.now()}-${field}`,eventType:field,summary:field==="status"?`Statut modifié : ${globalTaskStatusLabels[task.status]} → ${globalTaskStatusLabels[value as GlobalProjectTask["status"]]}`:`Priorité modifiée : ${globalTaskPriorityLabels[task.priority]} → ${globalTaskPriorityLabels[value as GlobalProjectTaskPriority]}`,actorName:currentUser!.name,createdAt:new Date().toISOString()}));
+        return {...task,...update,activity:[...task.activity,...activity]};
+      })}));
+      return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/tasks/${taskId}`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify(update)},"Tâche mise à jour."));
+  };
+  const addGlobalTaskComment:MvpSharedProps["onAddGlobalTaskComment"]=async(projectId,taskId,comment)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id!==projectId?project:{...project,tasks:project.tasks.map(task=>task.id===taskId?{...task,activity:[...task.activity,{id:`SIM-GEVENT-${Date.now()}`,eventType:"comment",summary:comment,actorName:currentUser!.name,createdAt:new Date().toISOString()}]}:task)}));
+      setActionSuccess(true);setActionMessage("Simulation locale : commentaire ajouté sans écriture dans la base.");return true;
+    }
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/tasks/${taskId}/activity`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({comment})},"Commentaire ajouté au projet."));
+  };
+  const uploadGlobalTaskDocument:MvpSharedProps["onUploadGlobalTaskDocument"]=async(projectId,taskId,file)=>{
+    if(canUseLocalEditor&&projectId.startsWith("SIM-GLOBAL-")){
+      setLocalDemoGlobalProjects(projects=>projects.map(project=>project.id!==projectId?project:{...project,tasks:project.tasks.map(task=>task.id===taskId?{...task,documents:[...task.documents,{id:`SIM-GDOC-${Date.now()}`,originalName:file.name,mimeType:file.type,sizeBytes:file.size,uploadedBy:currentUser!.name,createdAt:new Date().toISOString(),downloadUrl:""}],activity:[...task.activity,{id:`SIM-GEVENT-${Date.now()}`,eventType:"document",summary:`Document ajouté : ${file.name}`,actorName:currentUser!.name,createdAt:new Date().toISOString()}]}:task)}));
+      setActionSuccess(true);setActionMessage("Simulation locale : document ajouté sans écriture dans la base.");return true;
+    }
+    const form=new FormData();form.set("file",file);
+    return Boolean(await runAction(`/api/v1/global-projects/${projectId}/tasks/${taskId}/documents`,{method:"POST",body:form},"Document ajouté à la tâche et au projet."));
   };
   const consumeRequestedGlobalProject=useCallback(()=>setRequestedGlobalProjectId(null),[]);
   const logout=async()=>{await fetch("/api/v1/auth/logout",{method:"POST"});setCurrentUser(null);setAccessStatus("anonymous");setAccountOpen(false);setAccountPanel(null)};
@@ -5598,7 +5938,26 @@ export default function Home() {
         ? { id: localDemoMandataireId, name: "Sophie Laurent", role: "Mandataire" as const, tradeId: localDemoTradeId, tradeName: "R&D Horlogerie — Simulation", status: "active" }
         : { id: localDemoFreelancerId, name: localDemoFreelancer.name, role: "Freelance" as const, tradeId: localDemoTradeId, tradeName: "R&D Horlogerie — Simulation", status: "active", projectClass: localDemoFreelancer.projectClass, credits: localDemoFreelancer.credits, note: localDemoFreelancer.note }
     : canUseLocalEditor && previewRole ? { ...currentUser, role: previewRole } : currentUser;
-  const shared: MvpSharedProps = { quotes, onCreateQuote: createQuote, onTransmitQuote: transmitQuote, onAcceptQuote: acceptQuote, onQuoteDecision:quoteDecision, acceptedProjects, globalProjects, onCreateGlobalProject:createGlobalProject, onAcceptGlobalProject:acceptGlobalProject, freelancer, onUpdateFreelancer: updateFreelancer, freelanceFolders, mandataireFolders, onCreateFolder: createFolder, onAddSharedFile: addSharedFile, currentUser: viewedUser, trades, users, applications, membershipRequests, adminInvitations, invoices, onInvoiceStatus:updateInvoice, tradeSettings, onSaveTradeSetting:saveTradeSetting, onValidateTradeSetting:validateTradeSetting, milestones, onAddMilestone:addMilestone, onMilestoneStatus:milestoneStatus, onCreateTrade:createTrade, onInviteAdmin:inviteAdmin, onDecideAdminInvitation:decideAdminInvitation, onDeleteAdminInvitation:deleteAdminInvitation, onAssignAdmin:assignAdmin, onCreateMember:createMember, onUserStatus:updateUserStatus, onDeleteUser:deleteUser, onDeleteTrade:deleteTrade, onApplyToMission:applyToMission, onSelectFreelancer:selectFreelancer, onProjectAction:projectAction, onCreateMembershipRequest:createMembershipRequest, onConfirmMembership:confirmMembership, onDecideMembership:decideMembership };
+  const personalGlobalNotes=[
+    ...(localProjectSimulation?[]:globalNotes),
+    ...localDemoGlobalNotes,
+    ...localDemoGlobalProjects.flatMap(project=>project.notes||[]),
+  ].filter(note=>note.authorUserId===viewedUser.id);
+  const shared: MvpSharedProps = {
+    quotes,onCreateQuote:createQuote,onTransmitQuote:transmitQuote,onAcceptQuote:acceptQuote,onQuoteDecision:quoteDecision,
+    acceptedProjects,globalProjects,globalNotes:personalGlobalNotes,onCreateGlobalProject:createGlobalProject,onCreateGlobalNote:createGlobalNote,onAcceptGlobalProject:acceptGlobalProject,
+    onCreateGlobalMilestone:createGlobalMilestone,onCreateGlobalTask:createGlobalTask,onCreateGlobalTaskSubject:createGlobalTaskSubject,
+    onClaimGlobalTask:claimGlobalTask,onUpdateGlobalTask:updateGlobalTask,onAddGlobalTaskComment:addGlobalTaskComment,
+    onUploadGlobalTaskDocument:uploadGlobalTaskDocument,freelancer,onUpdateFreelancer:updateFreelancer,
+    freelanceFolders,mandataireFolders,onCreateFolder:createFolder,onAddSharedFile:addSharedFile,currentUser:viewedUser,
+    trades,users,applications,membershipRequests,adminInvitations,invoices,onInvoiceStatus:updateInvoice,
+    tradeSettings,onSaveTradeSetting:saveTradeSetting,onValidateTradeSetting:validateTradeSetting,milestones,
+    onAddMilestone:addMilestone,onMilestoneStatus:milestoneStatus,onCreateTrade:createTrade,onInviteAdmin:inviteAdmin,
+    onDecideAdminInvitation:decideAdminInvitation,onDeleteAdminInvitation:deleteAdminInvitation,onAssignAdmin:assignAdmin,
+    onCreateMember:createMember,onUserStatus:updateUserStatus,onDeleteUser:deleteUser,onDeleteTrade:deleteTrade,
+    onApplyToMission:applyToMission,onSelectFreelancer:selectFreelancer,onProjectAction:projectAction,
+    onCreateMembershipRequest:createMembershipRequest,onConfirmMembership:confirmMembership,onDecideMembership:decideMembership
+  };
   if (localProjectSimulation) {
     const simulatedFile: SharedFile = { id: "SIM-DOC-TRADE", name: "Guide métier", description: "Document de démonstration", fileName: "guide-metier.pdf", url: "" };
     const simulatedTrade: PlatformTrade = { id: localDemoTradeId, name: "R&D Horlogerie — Simulation", adminName: "Alex Martin", adhesionDocument: simulatedFile };
@@ -5780,7 +6139,7 @@ export default function Home() {
             </section>
           </div>
         )}
-        {role === "Admin Eurêka" ? <AdminEurekaPortal active={active} onNavigate={setActive} shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/> : role === "Admin métier" ? <><SectionPage active={active} onNavigate={setActive} shared={shared} />{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</> : <><UserPortal role={role} active={active} onNavigate={setActive} shared={shared}/>{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</>}
+        {active==="Mes tâches"?<MyGlobalTasksBoard shared={shared}/>:active==="Mon bloc note"?<MyGlobalNotebookBoard shared={shared}/>:role === "Admin Eurêka" ? <AdminEurekaPortal active={active} onNavigate={setActive} shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/> : role === "Admin métier" ? <><SectionPage active={active} onNavigate={setActive} shared={shared} />{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</> : <><UserPortal role={role} active={active} onNavigate={setActive} shared={shared}/>{active==="Projets"&&<GlobalProjectsBoard shared={shared} requestedProjectId={requestedGlobalProjectId} onConsumeRequestedProject={consumeRequestedGlobalProject}/>}</>}
         {false &&
           (active === "Accueil" ? (
             <>

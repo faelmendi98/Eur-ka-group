@@ -12,7 +12,7 @@ class Statement {
   async run(){const result=this.db.prepare(this.sql).run(...this.values);return {meta:{changes:Number(result.changes)}}}
 }
 class D1 {
-  constructor(){this.sqlite=new DatabaseSync(":memory:");for(const name of ["0000_eureka_v1.sql","0001_eureka_accounts.sql","0002_eureka_identifiers.sql","0003_global_projects.sql"])this.sqlite.exec(readFileSync(new URL(`../drizzle/${name}`,import.meta.url),"utf8"))}
+  constructor(){this.sqlite=new DatabaseSync(":memory:");for(const name of ["0000_eureka_v1.sql","0001_eureka_accounts.sql","0002_eureka_identifiers.sql","0003_global_projects.sql","0004_global_project_work_items.sql","0005_global_project_task_subjects.sql","0006_global_project_task_collaboration.sql","0007_global_project_notes.sql"])this.sqlite.exec(readFileSync(new URL(`../drizzle/${name}`,import.meta.url),"utf8"))}
   prepare(sql){return new Statement(this.sqlite,sql)}
   async batch(statements){this.sqlite.exec("BEGIN");try{const results=[];for(const statement of statements)results.push(await statement.run());this.sqlite.exec("COMMIT");return results}catch(error){this.sqlite.exec("ROLLBACK");throw error}}
 }
@@ -100,10 +100,77 @@ test("projets globaux : invitations, accès participants et activation après to
   assert.equal(firstAcceptance.status,200);
   assert.equal(firstAcceptance.data.status,"pending");
   assert.equal(runtime.DB.sqlite.prepare("SELECT status FROM global_projects WHERE id=?").get(projectId).status,"pending");
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,secondParticipant,{title:"Tâche avant confirmation"})).status,404);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Responsable en attente",assigneeUserId:participantIds[1]})).status,400);
   const secondAcceptance=await call(runtime,"POST",`/global-projects/${projectId}/accept`,secondParticipant,{});
   assert.equal(secondAcceptance.status,200);
   assert.equal(secondAcceptance.data.status,"active");
   assert.equal(runtime.DB.sqlite.prepare("SELECT COUNT(*) count FROM global_project_participants WHERE project_id=? AND status='accepted'").get(projectId).count,3);
+  const projectNote=await call(runtime,"POST",`/global-projects/${projectId}/notes`,firstParticipant,{title:"Idée pour la séance",subject:"Parcours utilisateur",description:"Revoir l’étape de confirmation.\nEn parler à la prochaine séance."});
+  assert.equal(projectNote.status,201);
+  assert.equal(projectNote.data.project_id,projectId);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/notes`,outsider,{title:"Note externe",subject:"Idée",description:"Non autorisée"})).status,404);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/notes`,firstParticipant,{title:"Sujet manquant",description:"Note invalide"})).status,400);
+  const personalNote=await call(runtime,"POST","/global-notes",firstParticipant,{title:"À ne pas oublier",subject:"Nouvelle piste",description:"Une idée personnelle sans projet."});
+  assert.equal(personalNote.status,201);
+  assert.equal(personalNote.data.project_id,null);
+  const firstNotes=(await call(runtime,"GET","/session",firstParticipant)).data;
+  assert.equal(firstNotes.globalNotes.length,2);
+  const personalProjectNote=firstNotes.globalNotes.find(note=>note.id===projectNote.data.id);
+  assert.equal(personalProjectNote.project_title,"Projet transverse");
+  assert.equal(personalProjectNote.description,"Revoir l’étape de confirmation.\nEn parler à la prochaine séance.");
+  assert.ok(personalProjectNote.created_at);
+  assert.equal(firstNotes.globalProjects[0].notes[0].title,"Idée pour la séance");
+  const secondNotes=(await call(runtime,"GET","/session",secondParticipant)).data;
+  assert.equal(secondNotes.globalNotes.length,0);
+  assert.equal(secondNotes.globalProjects[0].notes[0].author_name,"Participant Un");
+  assert.equal((await call(runtime,"GET","/session",outsider)).data.globalNotes.length,0);
+  const milestone=await call(runtime,"POST",`/global-projects/${projectId}/milestones`,firstParticipant,{title:"Cadrage validé",dueAt:"2026-12-01"});
+  assert.equal(milestone.status,201);
+  const subject=await call(runtime,"POST",`/global-projects/${projectId}/task-subjects`,firstParticipant,{name:"Marketing"});
+  assert.equal(subject.status,201);
+  const duplicateSubject=await call(runtime,"POST",`/global-projects/${projectId}/task-subjects`,firstParticipant,{name:"marketing"});
+  assert.equal(duplicateSubject.data.id,subject.data.id);
+  const task=await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Préparer les besoins",subject:"Modification du site",description:"Lister les besoins de l’équipe.",dueAt:"2026-12-10",assigneeUserId:participantIds[1],priority:"urgent"});
+  assert.equal(task.status,201);
+  assert.equal(task.data.status,"todo");
+  assert.equal(task.data.subject,"Modification du site");
+  assert.equal(task.data.priority,"urgent");
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Tâche sans responsable",subject:"Marketing",priority:"high"})).status,201);
+  const freeTask=(await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Tâche libre",subject:"Marketing"})).data;
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks/${freeTask.id}/claim`,outsider,{})).status,404);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks/${freeTask.id}/claim`,firstParticipant,{})).status,200);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks/${freeTask.id}/claim`,secondParticipant,{})).status,409);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks/${freeTask.id}/activity`,firstParticipant,{comment:"Je prends cette tâche demain."})).status,201);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,outsider,{title:"Tâche externe"})).status,404);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Sujet manquant"})).status,400);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks`,firstParticipant,{title:"Date incorrecte",subject:"Marketing",dueAt:"2026-02-31"})).status,400);
+  assert.equal((await call(runtime,"PATCH",`/global-projects/${projectId}/tasks/${task.data.id}`,firstParticipant,{status:"in_progress"})).status,200);
+  assert.equal((await call(runtime,"PATCH",`/global-projects/${projectId}/tasks/${task.data.id}`,firstParticipant,{priority:"high"})).status,200);
+  assert.equal((await call(runtime,"PATCH",`/global-projects/${projectId}/tasks/${task.data.id}`,firstParticipant,{priority:"critical"})).status,400);
+  assert.equal((await call(runtime,"PATCH",`/global-projects/${projectId}/tasks/${task.data.id}`,outsider,{status:"done"})).status,404);
+  const upload=await call(runtime,"POST",`/global-projects/${projectId}/tasks/${task.data.id}/documents`,secondParticipant,await form({}));
+  assert.equal(upload.status,201);
+  assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/tasks/${task.data.id}/documents`,outsider,await form({}))).status,404);
+  const documentDownload=await handleV1Api(new Request(`https://example.test/api/v1/global-project-task-documents/${upload.data.id}/download`,{headers:{cookie:secondParticipant}}),runtime);
+  assert.equal(documentDownload.status,200);
+  assert.equal(await documentDownload.text(),"contenu");
+  const deniedDownload=await handleV1Api(new Request(`https://example.test/api/v1/global-project-task-documents/${upload.data.id}/download`,{headers:{cookie:outsider}}),runtime);
+  assert.equal(deniedDownload.status,404);
+  const updatedGlobalProject=(await call(runtime,"GET","/session",owner)).data.globalProjects[0];
+  assert.equal(updatedGlobalProject.milestones[0].title,"Cadrage validé");
+  assert.ok(updatedGlobalProject.task_subjects.some(item=>item.name==="Marketing"));
+  const updatedTask=updatedGlobalProject.tasks.find(item=>item.id===task.data.id);
+  assert.equal(updatedTask.subject,"Modification du site");
+  assert.equal(updatedTask.assignee_name,"Participant Deux");
+  assert.equal(updatedTask.status,"in_progress");
+  assert.equal(updatedTask.priority,"high");
+  assert.equal(updatedTask.documents[0].original_name,"document.pdf");
+  assert.ok(updatedTask.activity.some(event=>event.event_type==="document"));
+  const claimedTask=(await call(runtime,"GET","/session",firstParticipant)).data.globalProjects[0].tasks.find(item=>item.id===freeTask.id);
+  assert.equal(claimedTask.assignee_user_id,participantIds[0]);
+  assert.ok(claimedTask.activity.some(event=>event.event_type==="comment"&&event.summary==="Je prends cette tâche demain."));
+  assert.ok((await call(runtime,"GET","/session",secondParticipant)).data.globalProjects[0].tasks.find(item=>item.id===task.data.id).documents.length);
   assert.ok((await call(runtime,"GET","/session",owner)).data.notifications.some(notification=>notification.kind==="global_project_ready"));
   assert.equal(runtime.DB.sqlite.prepare("SELECT COUNT(*) count FROM notifications WHERE kind='global_project_ready'").get().count,3);
   assert.equal((await call(runtime,"POST",`/global-projects/${projectId}/accept`,secondParticipant,{})).data.status,"active");

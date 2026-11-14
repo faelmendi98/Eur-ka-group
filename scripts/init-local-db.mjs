@@ -19,7 +19,7 @@ if (!dbPath) {
   process.exit(0);
 }
 
-const migrationFiles = ['drizzle/0000_eureka_v1.sql', 'drizzle/0001_eureka_accounts.sql', 'drizzle/0002_eureka_identifiers.sql', 'drizzle/0003_global_projects.sql'];
+const migrationFiles = ['drizzle/0000_eureka_v1.sql', 'drizzle/0001_eureka_accounts.sql', 'drizzle/0002_eureka_identifiers.sql', 'drizzle/0003_global_projects.sql', 'drizzle/0004_global_project_work_items.sql', 'drizzle/0005_global_project_task_subjects.sql', 'drizzle/0006_global_project_task_collaboration.sql', 'drizzle/0007_global_project_notes.sql'];
 const db = new DatabaseSync(dbPath);
 
 function splitSqlStatements(sql) {
