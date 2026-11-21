@@ -199,6 +199,25 @@ async function sessionState(env: V1Env, auth: Auth) {
   const pendingAdmin=auth.globalAdmin?null:await env.DB.prepare("SELECT ai.id,ai.role,ai.trade_id,t.name trade_name FROM admin_invitations ai LEFT JOIN trades t ON t.id=ai.trade_id WHERE ai.email=? COLLATE NOCASE AND ai.status='pending' AND ai.role IN ('admin_eureka','admin_metier') ORDER BY ai.created_at DESC LIMIT 1").bind(auth.email).first();
   const adminInvitations=auth.globalAdmin?(await env.DB.prepare("SELECT ai.id,ai.display_name,ai.email,CASE WHEN ai.role='specialiste_metier' THEN 'admin_metier' ELSE ai.role END role,ai.trade_id,t.name trade_name,ai.status,ai.created_at,COALESCE((SELECT u.id FROM users u WHERE ai.email IS NOT NULL AND u.email=ai.email COLLATE NOCASE LIMIT 1),(SELECT u.id FROM users u WHERE lower(trim(u.display_name))=lower(trim(ai.display_name)) AND (SELECT COUNT(*) FROM users ux WHERE lower(trim(ux.display_name))=lower(trim(ai.display_name)))=1 LIMIT 1)) account_user_id FROM admin_invitations ai LEFT JOIN trades t ON t.id=ai.trade_id WHERE ai.status IN ('pending','awaiting_email') ORDER BY ai.created_at DESC").all()).results:[];
   const notifications = (await env.DB.prepare("SELECT id,kind,title,message,target_path,read_at,created_at FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50").bind(auth.id).all()).results;
+  const globalProjects = auth.globalAdmin
+    ? (await env.DB.prepare("SELECT gp.*,u.display_name creator_name FROM global_projects gp JOIN users u ON u.id=gp.created_by ORDER BY gp.created_at DESC").all<Record<string,unknown>>()).results
+    : (await env.DB.prepare("SELECT gp.*,u.display_name creator_name FROM global_projects gp JOIN users u ON u.id=gp.created_by WHERE gp.created_by=? OR EXISTS (SELECT 1 FROM global_project_participants gpp WHERE gpp.project_id=gp.id AND gpp.user_id=?) ORDER BY gp.created_at DESC").bind(auth.id,auth.id).all<Record<string,unknown>>()).results;
+  for(const project of globalProjects){
+    project.participants=(await env.DB.prepare("SELECT gpp.user_id,u.display_name,u.email,gpp.status,gpp.invited_at,gpp.accepted_at,CASE WHEN EXISTS (SELECT 1 FROM global_roles gr WHERE gr.user_id=u.id AND gr.role='admin_eureka') THEN 'Admin Eurêka' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role IN ('admin_metier','specialiste_metier')) THEN 'Admin métier' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role='mandataire') THEN 'Mandataire' WHEN EXISTS (SELECT 1 FROM trade_memberships tm WHERE tm.user_id=u.id AND tm.status='active' AND tm.role='freelance') THEN 'Freelance' ELSE 'Membre' END role FROM global_project_participants gpp JOIN users u ON u.id=gpp.user_id WHERE gpp.project_id=? ORDER BY CASE WHEN gpp.user_id=? THEN 0 ELSE 1 END,u.display_name").bind(project.id,auth.id).all()).results;
+    project.my_status=project.created_by===auth.id?"accepted":(project.participants as Record<string,unknown>[]).find(participant=>participant.user_id===auth.id)?.status||null;
+    project.milestones=(await env.DB.prepare("SELECT id,title,due_at,position,created_at FROM global_project_milestones WHERE project_id=? ORDER BY position,created_at").bind(project.id).all()).results;
+    project.notes=(await env.DB.prepare("SELECT n.id,n.project_id,n.title,n.subject,n.description,n.created_by author_user_id,COALESCE(u.display_name,'Utilisateur retiré') author_name,n.created_at FROM global_project_notes n LEFT JOIN users u ON u.id=n.created_by WHERE n.project_id=? ORDER BY n.created_at DESC,n.id DESC").bind(project.id).all()).results;
+    project.task_subjects=(await env.DB.prepare("SELECT id,name FROM global_project_task_subjects WHERE project_id=? ORDER BY name").bind(project.id).all()).results;
+    project.tasks=(await env.DB.prepare("SELECT t.id,t.title,t.subject,t.description,t.due_at,t.assignee_user_id,u.display_name assignee_name,t.status,t.priority,t.created_at,t.updated_at FROM global_project_tasks t LEFT JOIN users u ON u.id=t.assignee_user_id WHERE t.project_id=? ORDER BY t.created_at,t.id").bind(project.id).all<Record<string,unknown>>()).results;
+    const knownSubjects=new Set((project.task_subjects as Record<string,unknown>[]).map(subject=>String(subject.name).toLocaleLowerCase("fr")));
+    for(const task of project.tasks as Record<string,unknown>[]){
+      const subject=String(task.subject||"Général");
+      if(!knownSubjects.has(subject.toLocaleLowerCase("fr"))){(project.task_subjects as Record<string,unknown>[]).push({id:`legacy-${project.id}-${subject}`,name:subject});knownSubjects.add(subject.toLocaleLowerCase("fr"));}
+      task.documents=(await env.DB.prepare("SELECT d.id,d.original_name,d.mime_type,d.size_bytes,d.uploaded_by,u.display_name uploaded_by_name,d.created_at FROM global_project_task_documents d LEFT JOIN users u ON u.id=d.uploaded_by WHERE d.task_id=? ORDER BY d.created_at,d.id").bind(task.id).all()).results.map(document=>({...document,download_url:`/api/v1/global-project-task-documents/${document.id}/download`}));
+      task.activity=(await env.DB.prepare("SELECT e.id,e.event_type,e.summary,e.metadata_json,e.created_at,e.actor_user_id,COALESCE(u.display_name,'Utilisateur retiré') actor_name FROM global_project_task_events e LEFT JOIN users u ON u.id=e.actor_user_id WHERE e.task_id=? ORDER BY e.created_at,e.id").bind(task.id).all()).results;
+    }
+  }
+  const globalNotes=(await env.DB.prepare("SELECT n.id,n.project_id,n.title,n.subject,n.description,n.created_by author_user_id,u.display_name author_name,n.created_at,gp.title project_title FROM global_project_notes n JOIN users u ON u.id=n.created_by LEFT JOIN global_projects gp ON gp.id=n.project_id WHERE n.created_by=? ORDER BY n.created_at DESC,n.id DESC").bind(auth.id).all()).results;
   const scope = auth.globalAdmin ? "1=1" : tradeIds.length ? `trade_id IN (${tradeIds.map(()=>"?").join(",")})` : "0=1";
   const scopeBindings = auth.globalAdmin ? [] : tradeIds;
   let quoteRequests = (await env.DB.prepare(`SELECT * FROM quote_requests WHERE ${scope} ORDER BY created_at DESC`).bind(...scopeBindings).all()).results as Record<string,unknown>[];
@@ -225,7 +244,7 @@ async function sessionState(env: V1Env, auth: Auth) {
     }
   }
   const visibleProjectIds=new Set(projects.map((project:any)=>project.id));milestones=milestones.filter((milestone:any)=>visibleProjectIds.has(milestone.project_id));
-  return { currentUser:{ id:auth.id,email:auth.email,eurekaEmail:ownEurekaEmail,name:auth.name,globalAdmin:auth.globalAdmin }, memberships:ownMemberships,trades,users,membershipRequests:requests,pendingAdminInvitation:pendingAdmin,adminInvitations,quoteRequests,quotes,missions,applications,projects,milestones,invoices,tradeSettings,shareFolders,shareDocuments,workflowDocuments,notifications };
+  return { currentUser:{ id:auth.id,email:auth.email,eurekaEmail:ownEurekaEmail,name:auth.name,globalAdmin:auth.globalAdmin }, memberships:ownMemberships,trades,users,membershipRequests:requests,pendingAdminInvitation:pendingAdmin,adminInvitations,quoteRequests,quotes,missions,applications,projects,milestones,invoices,tradeSettings,shareFolders,shareDocuments,workflowDocuments,notifications,globalProjects,globalNotes };
 }
 
 async function handleTradeSettings(request:Request,env:V1Env,auth:Auth,settingId?:string,action?:string){
@@ -540,6 +559,238 @@ async function handleNotifications(request: Request, env: V1Env, auth: Auth, not
   if(request.method==="PATCH"&&notificationId){const result=await env.DB.prepare("UPDATE notifications SET read_at=COALESCE(read_at,?) WHERE id=? AND user_id=?").bind(now(),notificationId,auth.id).run();if(!result.meta.changes)return fail("Notification introuvable.",404);return reply({id:notificationId,read:true});}return fail("Méthode non autorisée.",405);
 }
 
+async function globalProjectContributor(env:V1Env,auth:Auth,projectId:string){
+  const project=await env.DB.prepare("SELECT id,title,created_by,status FROM global_projects WHERE id=?").bind(projectId).first<Record<string,unknown>>();
+  if(!project)return null;
+  if(auth.globalAdmin||project.created_by===auth.id)return project;
+  const participant=await env.DB.prepare("SELECT status FROM global_project_participants WHERE project_id=? AND user_id=?").bind(projectId,auth.id).first<{status:string}>();
+  return participant?.status==="accepted"?project:null;
+}
+
+async function createGlobalProjectNote(request:Request,env:V1Env,auth:Auth,projectId?:string){
+  if(request.method!=="POST")return fail("Méthode non autorisée.",405);
+  const project=projectId?await globalProjectContributor(env,auth,projectId):null;
+  if(projectId&&!project)return fail("Projet introuvable ou inaccessible.",404);
+  if(project?.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+  const input=await body(request);if(!input)return fail("Données invalides.",400);
+  const title=cleanText(input.title,160);
+  const subject=cleanText(input.subject,120);
+  const description=typeof input.description==="string"?input.description.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,"").trim().slice(0,8000):"";
+  if(!title||!subject||!description)return fail("Le titre, le sujet et la description sont obligatoires.",400,"validation_error");
+  const noteId=id("gnote"),createdAt=now();
+  await env.DB.prepare("INSERT INTO global_project_notes (id,project_id,created_by,title,subject,description,created_at) VALUES (?,?,?,?,?,?,?)").bind(noteId,projectId||null,auth.id,title,subject,description,createdAt).run();
+  return reply({id:noteId,project_id:projectId||null,title,subject,description,created_by:auth.id,author_user_id:auth.id,author_name:auth.name,created_at:createdAt,project_title:project?.title||null},201);
+}
+
+function validGlobalProjectDate(value:unknown){
+  if(value===undefined||value===null||value==="")return null;
+  if(typeof value!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(value))return undefined;
+  const date=new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime())||date.toISOString().slice(0,10)!==value?undefined:value;
+}
+
+async function recordGlobalTaskEvent(env:V1Env,auth:Auth,projectId:string,taskId:string,eventType:string,summary:string,metadata?:Record<string,unknown>){
+  await env.DB.prepare("INSERT INTO global_project_task_events (id,project_id,task_id,actor_user_id,event_type,summary,metadata_json) VALUES (?,?,?,?,?,?,?)").bind(id("gtevt"),projectId,taskId,auth.id,eventType,summary,metadata?JSON.stringify(metadata):null).run();
+}
+
+async function handleGlobalTaskDocument(request:Request,env:V1Env,auth:Auth,documentId?:string,action?:string){
+  if(request.method!=="GET"||!documentId||action!=="download")return fail("Méthode non autorisée.",405);
+  const document=await env.DB.prepare("SELECT * FROM global_project_task_documents WHERE id=?").bind(documentId).first<Record<string,unknown>>();
+  if(!document||!await globalProjectContributor(env,auth,String(document.project_id)))return fail("Document introuvable ou inaccessible.",404);
+  const object=await env.BUCKET.get(String(document.storage_key));
+  if(!object)return fail("Document introuvable.",404,"missing_object");
+  const headers=new Headers();
+  headers.set("content-type",String(document.mime_type));
+  headers.set("content-length",String(document.size_bytes));
+  headers.set("content-disposition",`attachment; filename*=UTF-8''${encodeURIComponent(String(document.original_name))}`);
+  headers.set("cache-control","private, no-store");
+  headers.set("x-content-type-options","nosniff");
+  return new Response(object.body,{headers});
+}
+
+async function handleGlobalProjects(request:Request,env:V1Env,auth:Auth,projectId?:string,action?:string,taskId?:string,taskAction?:string){
+  if(request.method==="POST"&&projectId&&action==="notes"&&!taskId)return createGlobalProjectNote(request,env,auth,projectId);
+  if(request.method==="POST"&&projectId&&action==="task-subjects"){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const input=await body(request);
+    const name=cleanText(input?.name,120);
+    if(!name)return fail("Le nom du sujet est obligatoire.",400,"invalid_subject");
+    await env.DB.prepare("INSERT INTO global_project_task_subjects (id,project_id,name,created_by) VALUES (?,?,?,?) ON CONFLICT DO NOTHING").bind(id("gsubj"),projectId,name,auth.id).run();
+    const subject=await env.DB.prepare("SELECT id,name FROM global_project_task_subjects WHERE project_id=? AND lower(name)=lower(?)").bind(projectId,name).first<Record<string,unknown>>();
+    if(!subject)return fail("Impossible d’enregistrer ce sujet.",500);
+    return reply(subject,201);
+  }
+  if(request.method==="POST"&&!projectId){
+    if(!auth.globalAdmin)return fail("Accès réservé à l’Admin Eurêka.",403,"forbidden");
+    const input=await body(request);
+    const title=cleanText(input?.title,160);
+    const summary=cleanText(input?.summary,3000);
+    if(!title||!summary||!Array.isArray(input?.participantIds))return fail("Nom, résumé et participants obligatoires.",400,"validation_error");
+    const participantIds=[...new Set((input.participantIds as unknown[]).map(value=>typeof value==="string"?cleanText(value,80):"").filter(value=>value&&value!==auth.id))];
+    if(!participantIds.length||participantIds.length>50)return fail("Sélectionnez entre 1 et 50 autres participants.",400,"invalid_participants");
+    const activeUsers=(await env.DB.prepare(`SELECT id,display_name FROM users WHERE status='active' AND id IN (${participantIds.map(()=>"?").join(",")})`).bind(...participantIds).all<{id:string;display_name:string}>()).results;
+    if(activeUsers.length!==participantIds.length)return fail("Un ou plusieurs participants ne sont plus actifs.",409,"participant_unavailable");
+    const projectIdNew=id("gprj");
+    const statements=[
+      env.DB.prepare("INSERT INTO global_projects (id,title,summary,status,created_by) VALUES (?,?,?,'pending',?)").bind(projectIdNew,title,summary,auth.id),
+      env.DB.prepare("INSERT INTO global_project_participants (project_id,user_id,status,accepted_at) VALUES (?,?,'accepted',?)").bind(projectIdNew,auth.id,now()),
+      ...activeUsers.flatMap(participant=>[
+        env.DB.prepare("INSERT INTO global_project_participants (project_id,user_id,status) VALUES (?,?,'pending')").bind(projectIdNew,participant.id),
+        env.DB.prepare("INSERT INTO notifications (id,trade_id,user_id,kind,title,message,target_path) VALUES (?,NULL,?,?,?,?,?)").bind(id("not"),participant.id,"global_project_invitation","Invitation à un projet",`${auth.name} vous invite à prendre part au projet « ${title} ».`,`/global-projects/${projectIdNew}`),
+      ]),
+    ];
+    await env.DB.batch(statements);
+    await audit(env,auth,"global_project.created","global_project",projectIdNew,null,{participantCount:participantIds.length});
+    return reply({id:projectIdNew,title,status:"pending"},201);
+  }
+  if(request.method==="POST"&&projectId&&(action==="milestones"||(action==="tasks"&&!taskId))){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const input=await body(request);
+    const title=cleanText(input?.title,160);
+    const dueAt=validGlobalProjectDate(input?.dueAt);
+    if(!title)return fail("Le titre est obligatoire.",400,"validation_error");
+    if(dueAt===undefined)return fail("L’échéance doit être une date valide.",400,"invalid_due_date");
+    if(action==="milestones"){
+      const count=await env.DB.prepare("SELECT COUNT(*) count FROM global_project_milestones WHERE project_id=?").bind(projectId).first<{count:number}>();
+      const milestoneId=id("gmil");
+      await env.DB.prepare("INSERT INTO global_project_milestones (id,project_id,title,due_at,position,created_by) VALUES (?,?,?,?,?,?)").bind(milestoneId,projectId,title,dueAt,Number(count?.count||0),auth.id).run();
+      return reply({id:milestoneId,title,due_at:dueAt,status:"planned"},201);
+    }
+    if(typeof input?.subject!=="string"||!cleanText(input.subject,120))return fail("Le sujet de la tâche est obligatoire.",400,"invalid_subject");
+    if(input?.description!==undefined&&typeof input.description!=="string")return fail("La description doit être un texte.",400,"invalid_description");
+    if(input?.assigneeUserId!==undefined&&input.assigneeUserId!==null&&typeof input.assigneeUserId!=="string")return fail("Le responsable sélectionné est invalide.",400,"invalid_assignee");
+    const subject=cleanText(input.subject,120);
+    const description=cleanText(input?.description,2000);
+    const assigneeUserId=cleanText(input?.assigneeUserId,80);
+    const priority=cleanText(input?.priority,20)||"normal";
+    if(!["low","normal","high","urgent"].includes(priority))return fail("Priorité de tâche invalide.",400,"invalid_task_priority");
+    let assigneeName="";
+    if(assigneeUserId){
+      const assignee=await env.DB.prepare("SELECT gpp.status,u.display_name FROM global_project_participants gpp JOIN users u ON u.id=gpp.user_id WHERE gpp.project_id=? AND gpp.user_id=?").bind(projectId,assigneeUserId).first<{status:string;display_name:string}>();
+      if(assignee?.status!=="accepted")return fail("Le responsable doit avoir confirmé sa participation au projet.",400,"invalid_assignee");
+      assigneeName=assignee.display_name;
+    }
+    const newTaskId=id("gtask");
+    await env.DB.prepare("INSERT INTO global_project_task_subjects (id,project_id,name,created_by) VALUES (?,?,?,?) ON CONFLICT DO NOTHING").bind(id("gsubj"),projectId,subject,auth.id).run();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO global_project_tasks (id,project_id,title,subject,description,due_at,assignee_user_id,priority,created_by) VALUES (?,?,?,?,?,?,?,?,?)").bind(newTaskId,projectId,title,subject,description,dueAt,assigneeUserId||null,priority,auth.id),
+      env.DB.prepare("INSERT INTO global_project_task_events (id,project_id,task_id,actor_user_id,event_type,summary,metadata_json) VALUES (?,?,?,?,'created',?,?)").bind(id("gtevt"),projectId,newTaskId,auth.id,`Tâche créée : ${title} · Priorité ${priority} · ${assigneeName?`attribuée à ${assigneeName}`:"libre à prendre"}`,JSON.stringify({subject,priority,assigneeUserId:assigneeUserId||null})),
+    ]);
+    if(assigneeUserId&&assigneeUserId!==auth.id)await notify(env,assigneeUserId,null,"global_task_assigned","Nouvelle tâche attribuée",title,`/global-projects/${projectId}`);
+    return reply({id:newTaskId,title,subject,description,due_at:dueAt,assignee_user_id:assigneeUserId||null,status:"todo",priority},201);
+  }
+  if(request.method==="POST"&&projectId&&action==="tasks"&&taskId&&taskAction==="claim"){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const task=await env.DB.prepare("SELECT id,title,assignee_user_id FROM global_project_tasks WHERE id=? AND project_id=?").bind(taskId,projectId).first<Record<string,unknown>>();
+    if(!task)return fail("Tâche introuvable.",404);
+    if(task.assignee_user_id)return fail("Cette tâche a déjà été attribuée.",409,"task_already_assigned");
+    const result=await env.DB.prepare("UPDATE global_project_tasks SET assignee_user_id=?,updated_at=? WHERE id=? AND project_id=? AND assignee_user_id IS NULL").bind(auth.id,now(),taskId,projectId).run();
+    if(!result.meta.changes)return fail("Cette tâche vient d’être prise par une autre personne.",409,"task_already_assigned");
+    await recordGlobalTaskEvent(env,auth,projectId,taskId,"claimed",`${auth.name} a pris cette tâche.`);
+    return reply({id:taskId,assignee_user_id:auth.id});
+  }
+  if(request.method==="POST"&&projectId&&action==="tasks"&&taskId&&taskAction==="activity"){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const task=await env.DB.prepare("SELECT id FROM global_project_tasks WHERE id=? AND project_id=?").bind(taskId,projectId).first();
+    if(!task)return fail("Tâche introuvable.",404);
+    const input=await body(request);
+    const comment=cleanText(input?.comment,4000);
+    if(!comment)return fail("Le commentaire ne peut pas être vide.",400,"empty_comment");
+    await recordGlobalTaskEvent(env,auth,projectId,taskId,"comment",comment);
+    return reply({id:taskId,created:true},201);
+  }
+  if(request.method==="POST"&&projectId&&action==="tasks"&&taskId&&taskAction==="documents"){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const task=await env.DB.prepare("SELECT id,title FROM global_project_tasks WHERE id=? AND project_id=?").bind(taskId,projectId).first<Record<string,unknown>>();
+    if(!task)return fail("Tâche introuvable.",404);
+    const form=await request.formData();
+    const file=form.get("file");
+    if(!(file instanceof File))return fail("Le document est obligatoire.",400,"document_required");
+    if(file.size===0||file.size>maxUploadBytes)return fail("Le fichier doit être compris entre 1 octet et 20 Mo.",413,"file_size");
+    const original=file.name.replace(/[\\/\0]/g,"_").slice(0,180);
+    const extension=(original.split(".").pop()||"").toLowerCase();
+    if(!allowedExtensions.has(extension))return fail("Ce format de fichier n’est pas autorisé.",415,"file_type");
+    const documentId=id("gtaskdoc");
+    const key=`global-projects/${projectId}/tasks/${taskId}/${documentId}`;
+    await env.BUCKET.put(key,await file.arrayBuffer(),{httpMetadata:{contentType:file.type||"application/octet-stream"},customMetadata:{originalName:original,documentId}});
+    try{
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO global_project_task_documents (id,project_id,task_id,uploaded_by,original_name,storage_key,mime_type,size_bytes) VALUES (?,?,?,?,?,?,?,?)").bind(documentId,projectId,taskId,auth.id,original,key,file.type||"application/octet-stream",file.size),
+        env.DB.prepare("INSERT INTO global_project_task_events (id,project_id,task_id,actor_user_id,event_type,summary,metadata_json) VALUES (?,?,?,?,'document',?,?)").bind(id("gtevt"),projectId,taskId,auth.id,`Document ajouté : ${original}`,JSON.stringify({documentId})),
+      ]);
+    }catch(error){
+      await env.BUCKET.delete(key);
+      throw error;
+    }
+    return reply({id:documentId,original_name:original,download_url:`/api/v1/global-project-task-documents/${documentId}/download`},201);
+  }
+  if(request.method==="PATCH"&&projectId&&action==="tasks"&&taskId){
+    const project=await globalProjectContributor(env,auth,projectId);
+    if(!project)return fail("Projet introuvable ou inaccessible.",404);
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    const task=await env.DB.prepare("SELECT id,status,priority FROM global_project_tasks WHERE id=? AND project_id=?").bind(taskId,projectId).first<{id:string;status:string;priority:string}>();
+    if(!task)return fail("Tâche introuvable.",404);
+    const input=await body(request);
+    if(!input||(!Object.hasOwn(input,"status")&&!Object.hasOwn(input,"priority")))return fail("Aucune modification de tâche reçue.",400,"empty_task_update");
+    const statements=[];
+    if(Object.hasOwn(input,"status")){
+      const status=cleanText(input.status,20);
+      if(!["todo","in_progress","done"].includes(status))return fail("Statut de tâche invalide.",400,"invalid_task_status");
+      if(status!==task.status){
+        statements.push(env.DB.prepare("UPDATE global_project_tasks SET status=?,updated_at=? WHERE id=?").bind(status,now(),taskId));
+        statements.push(env.DB.prepare("INSERT INTO global_project_task_events (id,project_id,task_id,actor_user_id,event_type,summary) VALUES (?,?,?,?,'status',?)").bind(id("gtevt"),projectId,taskId,auth.id,`Statut modifié : ${task.status} → ${status}`));
+      }
+    }
+    if(Object.hasOwn(input,"priority")){
+      const priority=cleanText(input.priority,20);
+      if(!["low","normal","high","urgent"].includes(priority))return fail("Priorité de tâche invalide.",400,"invalid_task_priority");
+      if(priority!==task.priority){
+        statements.push(env.DB.prepare("UPDATE global_project_tasks SET priority=?,updated_at=? WHERE id=?").bind(priority,now(),taskId));
+        statements.push(env.DB.prepare("INSERT INTO global_project_task_events (id,project_id,task_id,actor_user_id,event_type,summary) VALUES (?,?,?,?,'priority',?)").bind(id("gtevt"),projectId,taskId,auth.id,`Priorité modifiée : ${task.priority} → ${priority}`));
+      }
+    }
+    if(statements.length)await env.DB.batch(statements);
+    return reply({id:taskId,status:Object.hasOwn(input,"status")?cleanText(input.status,20):task.status,priority:Object.hasOwn(input,"priority")?cleanText(input.priority,20):task.priority});
+  }
+  if(request.method==="POST"&&projectId&&action==="accept"){
+    const project=await env.DB.prepare("SELECT * FROM global_projects WHERE id=?").bind(projectId).first<Record<string,unknown>>();
+    if(!project)return fail("Projet introuvable.",404);
+    const participant=await env.DB.prepare("SELECT status FROM global_project_participants WHERE project_id=? AND user_id=?").bind(projectId,auth.id).first<{status:string}>();
+    if(!participant)return fail("Vous ne participez pas à ce projet.",403,"forbidden");
+    if(project.status==="archived")return fail("Ce projet est archivé.",409,"project_archived");
+    if(participant.status==="accepted")return reply({id:projectId,status:project.status,accepted:true});
+    const results=await env.DB.batch([
+      env.DB.prepare("UPDATE global_project_participants SET status='accepted',accepted_at=? WHERE project_id=? AND user_id=? AND status='pending'").bind(now(),projectId,auth.id),
+      env.DB.prepare("UPDATE global_projects SET status='active',updated_at=? WHERE id=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM global_project_participants WHERE project_id=? AND status='pending')").bind(now(),projectId,projectId),
+    ]);
+    if(!results[0].meta.changes){
+      const current=await env.DB.prepare("SELECT status FROM global_project_participants WHERE project_id=? AND user_id=?").bind(projectId,auth.id).first<{status:string}>();
+      if(current?.status==="accepted")return reply({id:projectId,status:project.status,accepted:true});
+      return fail("L’invitation a déjà été traitée.",409,"invitation_already_processed");
+    }
+    if(results[1].meta.changes){
+      const participants=(await env.DB.prepare("SELECT user_id FROM global_project_participants WHERE project_id=?").bind(projectId).all<{user_id:string}>()).results;
+      for(const row of participants)await notify(env,row.user_id,null,"global_project_ready","Projet confirmé",`Tous les participants ont rejoint le projet « ${project.title} ».`,`/global-projects/${projectId}`);
+      await audit(env,auth,"global_project.activated","global_project",projectId,null);
+    }else{
+      await audit(env,auth,"global_project.participant_accepted","global_project",projectId,null);
+    }
+    const updated=await env.DB.prepare("SELECT status FROM global_projects WHERE id=?").bind(projectId).first<{status:string}>();
+    return reply({id:projectId,status:updated?.status||"pending",accepted:true});
+  }
+  return fail("Méthode non autorisée.",405);
+}
+
 async function handleInvoices(request: Request, env: V1Env, auth: Auth, invoiceId: string) {
   if(request.method!=="PATCH")return fail("Méthode non autorisée.",405);const invoice=await env.DB.prepare("SELECT * FROM invoices WHERE id=?").bind(invoiceId).first<Record<string,unknown>>();if(!invoice)return fail("Facture introuvable.",404);if(!(await requireTradeRole(env,auth,String(invoice.trade_id),["admin_metier"])))return fail("Accès refusé.",403);const input=await body(request);const status=cleanText(input?.status,40);if(!invoiceTransitionAllowed(String(invoice.status),status))return fail("Transition de facturation invalide.",409,"invalid_transition");await env.DB.batch([env.DB.prepare("UPDATE invoices SET status=?,issue_date=COALESCE(issue_date,CASE WHEN ?='invoice_sent' THEN ? END),confirmed_by=?,updated_at=? WHERE id=?").bind(status,status,now().slice(0,10),auth.id,now(),invoiceId),env.DB.prepare("INSERT INTO invoice_events (id,invoice_id,actor_user_id,old_status,new_status,note) VALUES (?,?,?,?,?,?)").bind(id("ine"),invoiceId,auth.id,invoice.status,status,cleanText(input?.note,1000)||null)]);await audit(env,auth,"invoice.status_changed","invoice",invoiceId,String(invoice.trade_id),{from:invoice.status,to:status});return reply({id:invoiceId,status});
 }
@@ -677,6 +928,9 @@ export async function handleV1Api(request: Request, env: V1Env): Promise<Respons
     if(parts[0]==="members"&&parts[1])return handleMemberUpdate(request,env,auth,parts[1]);
     if(parts[0]==="quote-requests")return handleQuoteRequests(request,env,auth);
     if(parts[0]==="quotes")return handleQuotes(request,env,auth,parts[1],parts[2]);
+    if(parts[0]==="global-notes")return createGlobalProjectNote(request,env,auth);
+    if(parts[0]==="global-projects")return handleGlobalProjects(request,env,auth,parts[1],parts[2],parts[3],parts[4]);
+    if(parts[0]==="global-project-task-documents")return handleGlobalTaskDocument(request,env,auth,parts[1],parts[2]);
     if(parts[0]==="missions"&&parts[1]&&parts[2]==="applications")return handleApplication(request,env,auth,parts[1]);
     if(parts[0]==="missions"&&parts[1]&&parts[2]==="assign")return handleAssignment(request,env,auth,parts[1]);
     if(parts[0]==="projects"&&parts[1]&&parts[2]==="milestones")return handleMilestones(request,env,auth,parts[1]);

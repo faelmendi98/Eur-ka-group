@@ -1,0 +1,47 @@
+name: Deploy production to Netlify
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netlify-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check Netlify secrets
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          test -n "$NETLIFY_AUTH_TOKEN" || { echo "::error::Add NETLIFY_AUTH_TOKEN to the repository Actions secrets."; exit 1; }
+          test -n "$NETLIFY_SITE_ID" || { echo "::error::Add NETLIFY_SITE_ID to the repository Actions secrets."; exit 1; }
+
+      - name: Install dependencies
+        run: npm run install:ci
+
+      - name: Build site
+        run: npm run build:netlify
+
+      - name: Deploy production
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@27.16.2 deploy --prod --dir=out --functions=netlify/functions --site="$NETLIFY_SITE_ID"
