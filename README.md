@@ -51,6 +51,27 @@ La version complète originale reste séparée de ce projet V1.
 
 La cible envisagée pour le POC est Netlify pour l’application et Supabase pour PostgreSQL, Auth et Storage. Le dépôt contient la première migration PostgreSQL, générée à partir des migrations D1 :
 
+```mermaid
+flowchart LR
+	Dev["Développement local<br/>npm run dev"]
+	Branch["Branche Git"]
+	PR["PR sur GitHub"]
+	Preview["Prévisualisation Netlify<br/>(si activée)"]
+	Merge["Fusion dans main"]
+	Deploy["Build et déploiement Netlify"]
+	App["Application en ligne"]
+	Supabase[("Supabase<br/>Auth · PostgreSQL · Storage")]
+	Migration["Migration SQL / données<br/>séparée, après sauvegarde"]
+
+	Dev --> Branch --> PR --> Merge --> Deploy --> App
+	PR -.-> Preview
+	Dev <-->|"API, authentification,<br/>données et fichiers"| Supabase
+	App <-->|"API, authentification,<br/>données et fichiers"| Supabase
+	Migration --> Supabase
+```
+
+La fusion d’une PR déploie le code si le dépôt GitHub est connecté à Netlify et le déploiement automatique configuré. Elle ne lance pas automatiquement la migration SQL ou le transfert des données vers Supabase.
+
 ```bash
 npm run db:supabase:generate
 ```
